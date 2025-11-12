@@ -1,0 +1,44 @@
+/root/miniconda3/envs/pytorchT/lib/python3.10/site-packages/torch/distributed/launch.py:207: FutureWarning: The module torch.distributed.launch is deprecated
+and will be removed in future. Use torchrun.
+Note that --use-env is set by default in torchrun.
+If your script expects `--local-rank` argument to be set, please
+change it to read from `os.environ['LOCAL_RANK']` instead. See 
+https://pytorch.org/docs/stable/distributed.html#launch-utility for 
+further instructions
+
+  main()
+xFormers not available
+xFormers not available
+[2025-11-12 10:01:48,826][    INFO] {'backbone': 'dinov2_small',
+ 'batch_size': 2,
+ 'conf_thresh': 0.92,
+ 'config': 'configs/pascal.yaml',
+ 'criterion': {'kwargs': {'ignore_index': 255}, 'name': 'CELoss'},
+ 'crop_size': 476,
+ 'data_root': '/DeepLearning_linux/Dataset/VOC2012',
+ 'dataset': 'pascal',
+ 'epochs': 90,
+ 'labeled_id_path': 'splits/pascal/183/labeled.txt',
+ 'local_rank': 0,
+ 'lock_backbone': False,
+ 'lr': 5e-06,
+ 'lr_multi': 30.0,
+ 'model': 'dpt',
+ 'nclass': 21,
+ 'ngpus': 1,
+ 'port': 456,
+ 'save_path': 'exp/pascal/unimatch_v2/dinov2_small/183',
+ 'unlabeled_id_path': 'splits/pascal/183/unlabeled.txt'}
+
+[2025-11-12 10:01:49,664][    INFO] Total params: 24.8M
+[2025-11-12 10:01:49,665][    INFO] Encoder params: 22.1M
+[2025-11-12 10:01:49,665][    INFO] Decoder params: 2.7M
+
+[2025-11-12 10:01:50,175][    INFO] ===========> Epoch: 0, Previous best: 0.00 @epoch-0, EMA: 0.00 @epoch-0
+/root/miniconda3/envs/pytorchT/lib/python3.10/site-packages/torch/autograd/graph.py:824: UserWarning: Grad strides do not match bucket view strides. This may indicate grad was not created according to the gradient layout contract, or that the param's strides changed since DDP was constructed.  This is not an error, but may impair performance.
+grad.sizes() = [21, 64, 1, 1], strides() = [64, 1, 64, 64]
+bucket_view.sizes() = [21, 64, 1, 1], strides() = [64, 1, 1, 1] (Triggered internally at /pytorch/torch/csrc/distributed/c10d/reducer.cpp:328.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+[2025-11-12 10:01:54,529][    INFO] Iters: 0, LR: 0.0000050, Total loss: 1.506, Loss x: 3.011, Loss s: 0.000, Mask ratio: 0.000
+[2025-11-12 10:08:34,723][    INFO] Iters: 649, LR: 0.0000050, Total loss: 0.312, Loss x: 0.605, Loss s: 0.020, Mask ratio: 0.427
+[2025-11-12 10:15:12,119][    INFO] Iters: 1298, LR: 0.0000050, Total loss: 0.228, Loss x: 0.398, Loss s: 0.059, Mask ratio: 0.570

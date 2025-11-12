@@ -8,5 +8,6 @@ scikit-learn
 scikit-image
 einops
 h5py
-torch
-torchvision
+torch==2.7.1+cu118
+torchaudio==2.7.1+cu118
+torchvision==0.22.1+cu118
