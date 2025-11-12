@@ -222,7 +222,6 @@ def main():
     # ============================== 14. 加载checkpoint（断点续训） ==============================
     # 检查是否存在最新的checkpoint文件
     if os.path.exists(os.path.join(args.save_path, 'latest.pth')):
-        # 加载checkpoint（CPU上加载，避免GPU不匹配）
         checkpoint = torch.load(os.path.join(args.save_path, 'latest.pth'), map_location='cpu')
         model.load_state_dict(checkpoint['model'])  # 恢复原始模型权重
         model_ema.load_state_dict(checkpoint['model_ema'])  # 恢复EMA模型权重
