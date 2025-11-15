@@ -1,0 +1,11 @@
+
+对于/DeepLearning_linux/Projects/UniMatch-V2-Mybranch/test_image 下，
+有image1,image2,image3三张png图片，利用这三张图片，结合def blur(img, p=0.5):
+    if random.random() < p:
+        sigma = np.random.uniform(0.1, 2.0)
+        img = img.filter(ImageFilter.GaussianBlur(radius=sigma))
+    return img 写一个测试用例，可以返回变换后的图片
+
+
+
+ 给出一个可以很明显看出XXX前后效果的测试例子   
