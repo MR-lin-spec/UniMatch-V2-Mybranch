@@ -1,0 +1,85 @@
+/root/miniconda3/envs/pytorchGTA/lib/python3.10/site-packages/torch/distributed/launch.py:208: FutureWarning: The module torch.distributed.launch is deprecated
+and will be removed in future. Use torchrun.
+Note that --use-env is set by default in torchrun.
+If your script expects `--local-rank` argument to be set, please
+change it to read from `os.environ['LOCAL_RANK']` instead. See 
+https://pytorch.org/docs/stable/distributed.html#launch-utility for 
+further instructions
+
+  main()
+xFormers not available
+xFormers not available
+[2025-11-15 22:04:09,971][    INFO] {'backbone': 'dinov2_small',
+ 'batch_size': 4,
+ 'conf_thresh': 0.92,
+ 'config': 'configs/pascal.yaml',
+ 'criterion': {'kwargs': {'ignore_index': 255}, 'name': 'CELoss'},
+ 'crop_size': 476,
+ 'data_root': '/root/autodl-tmp/VOC2012',
+ 'dataset': 'pascal',
+ 'epochs': 90,
+ 'labeled_id_path': 'splits/pascal/92/labeled.txt',
+ 'local_rank': 0,
+ 'lock_backbone': False,
+ 'lr': 6e-06,
+ 'lr_multi': 30.0,
+ 'model': 'dpt',
+ 'nclass': 21,
+ 'ngpus': 1,
+ 'port': 456,
+ 'save_path': 'exp/pascal/unimatch_v2/dinov2_small/92',
+ 'unlabeled_id_path': 'splits/pascal/92/unlabeled.txt'}
+
+/root/UniMatch-V2-Mybranch/unimatch_v2.py:91: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  state_dict = torch.load(f'./pretrained/{cfg["backbone"]}.pth')
+[2025-11-15 22:04:10,458][    INFO] Total params: 24.8M
+[2025-11-15 22:04:10,459][    INFO] Encoder params: 22.1M
+[2025-11-15 22:04:10,459][    INFO] Decoder params: 2.7M
+
+[2025-11-15 22:04:10,853][    INFO] ===========> Epoch: 0, Previous best: 0.00 @epoch-0, EMA: 0.00 @epoch-0
+/root/miniconda3/envs/pytorchGTA/lib/python3.10/site-packages/torch/autograd/graph.py:769: UserWarning: Grad strides do not match bucket view strides. This may indicate grad was not created according to the gradient layout contract, or that the param's strides changed since DDP was constructed.  This is not an error, but may impair performance.
+grad.sizes() = [21, 64, 1, 1], strides() = [64, 1, 64, 64]
+bucket_view.sizes() = [21, 64, 1, 1], strides() = [64, 1, 1, 1] (Triggered internally at ../torch/csrc/distributed/c10d/reducer.cpp:327.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+[2025-11-15 22:04:14,552][    INFO] Iters: 0, LR: 0.0000060, Total loss: 1.520, Loss x: 3.041, Loss s: 0.000, Mask ratio: 0.000
+[2025-11-15 22:04:15,359][    INFO] Iters: 3, LR: 0.0000060, Total loss: 1.375, Loss x: 2.749, Loss s: 0.000, Mask ratio: 0.000
+[2025-11-15 22:04:16,143][    INFO] Iters: 6, LR: 0.0000060, Total loss: 1.181, Loss x: 2.362, Loss s: 0.000, Mask ratio: 0.000
+[2025-11-15 22:04:16,914][    INFO] Iters: 9, LR: 0.0000060, Total loss: 1.022, Loss x: 2.044, Loss s: 0.000, Mask ratio: 0.000
+[2025-11-15 22:04:17,679][    INFO] Iters: 12, LR: 0.0000060, Total loss: 0.968, Loss x: 1.937, Loss s: 0.000, Mask ratio: 0.000
+[2025-11-15 22:04:18,454][    INFO] Iters: 15, LR: 0.0000060, Total loss: 0.927, Loss x: 1.854, Loss s: 0.000, Mask ratio: 0.000
+[2025-11-15 22:04:19,215][    INFO] Iters: 18, LR: 0.0000060, Total loss: 0.888, Loss x: 1.776, Loss s: 0.000, Mask ratio: 0.000
+[2025-11-15 22:04:19,975][    INFO] Iters: 21, LR: 0.0000060, Total loss: 0.869, Loss x: 1.737, Loss s: 0.000, Mask ratio: 0.000
+[2025-11-15 22:04:20,742][    INFO] Iters: 24, LR: 0.0000059, Total loss: 0.844, Loss x: 1.689, Loss s: 0.000, Mask ratio: 0.003
+[2025-11-15 22:05:11,414][    INFO] ***** Evaluation ***** >>>> Class [0 background] IoU: 87.57, EMA: 76.63
+[2025-11-15 22:05:11,414][    INFO] ***** Evaluation ***** >>>> Class [1 aeroplane] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,414][    INFO] ***** Evaluation ***** >>>> Class [2 bicycle] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,414][    INFO] ***** Evaluation ***** >>>> Class [3 bird] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,414][    INFO] ***** Evaluation ***** >>>> Class [4 boat] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,414][    INFO] ***** Evaluation ***** >>>> Class [5 bottle] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,414][    INFO] ***** Evaluation ***** >>>> Class [6 bus] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [7 car] IoU: 0.03, EMA: 1.88
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [8 cat] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [9 chair] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [10 cow] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [11 dining table] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [12 dog] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [13 horse] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [14 motorbike] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [15 person] IoU: 19.98, EMA: 25.80
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [16 potted plant] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [17 sheep] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [18 sofa] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [19 train] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation ***** >>>> Class [20 tv/monitor] IoU: 0.00, EMA: 0.00
+[2025-11-15 22:05:11,415][    INFO] ***** Evaluation original ***** >>>> MeanIoU: 5.12, EMA: 4.97
+
+[2025-11-15 22:05:12,249][    INFO] ===========> Epoch: 1, Previous best: 5.12 @epoch-0, EMA: 4.97 @epoch-0
+[2025-11-15 22:05:13,806][    INFO] Iters: 0, LR: 0.0000059, Total loss: 0.564, Loss x: 1.124, Loss s: 0.004, Mask ratio: 0.103
+[2025-11-15 22:05:14,718][    INFO] Iters: 3, LR: 0.0000059, Total loss: 0.384, Loss x: 0.759, Loss s: 0.008, Mask ratio: 0.152
+[2025-11-15 22:05:15,519][    INFO] Iters: 6, LR: 0.0000059, Total loss: 0.410, Loss x: 0.813, Loss s: 0.007, Mask ratio: 0.167
+[2025-11-15 22:05:16,313][    INFO] Iters: 9, LR: 0.0000059, Total loss: 0.438, Loss x: 0.870, Loss s: 0.006, Mask ratio: 0.226
+[2025-11-15 22:05:17,108][    INFO] Iters: 12, LR: 0.0000059, Total loss: 0.453, Loss x: 0.901, Loss s: 0.005, Mask ratio: 0.244
+[2025-11-15 22:05:17,900][    INFO] Iters: 15, LR: 0.0000059, Total loss: 0.451, Loss x: 0.896, Loss s: 0.005, Mask ratio: 0.258
+[2025-11-15 22:05:18,696][    INFO] Iters: 18, LR: 0.0000059, Total loss: 0.484, Loss x: 0.963, Loss s: 0.006, Mask ratio: 0.272
+[2025-11-15 22:05:19,491][    INFO] Iters: 21, LR: 0.0000059, Total loss: 0.488, Loss x: 0.970, Loss s: 0.006, Mask ratio: 0.274
+[2025-11-15 22:05:20,287][    INFO] Iters: 24, LR: 0.0000059, Total loss: 0.472, Loss x: 0.937, Loss s: 0.006, Mask ratio: 0.275

@@ -2,12 +2,12 @@
 dataset: pascal
 data_root: /root/autodl-tmp/VOC2012
 nclass: 21
-crop_size: 490 # 调整为16×30=480（适配DinoV2的16x16 patch，比476保留更多细节，显存压力可控）
+crop_size: 476 # 调整为16×30=480（适配DinoV2的16x16 patch，比476保留更多细节，显存压力可控）
 
 # 训练相关（核心调整batch_size和lr，线性缩放）
 epochs: 90
 batch_size: 4 # 单RTX 4090 24GB最优选择（dinov2_small+480x480+AMP，显存占用≈19GB）
-lr: 0.00006       # 配合batch_size=24的学习率（原batch=2→lr=5e-6，缩放12倍：5e-6×12=6e-5）
+lr: 0.000006       # 配合batch_size=24的学习率（原batch=2→lr=5e-6，缩放12倍：5e-6×12=6e-5）
 lr_multi: 30.0  # 分割头学习率倍数不变（分割头需更高lr微调，30倍合理）
 criterion:
   name: CELoss
