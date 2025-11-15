@@ -8,7 +8,7 @@
 dataset='pascal'
 method='unimatch_v2'
 exp='dinov2_small'
-split='183'
+split='366'
 
 config=configs/${dataset}.yaml
 labeled_id_path=splits/$dataset/$split/labeled.txt

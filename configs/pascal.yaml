@@ -1,24 +1,21 @@
-# 数据集相关（核心调整crop_size）
+# arguments for dataset
 dataset: pascal
-data_root: /DeepLearning_linux/Dataset/VOC2012
+data_root: Your/PASCAL/Path
 nclass: 21
-crop_size: 476  # 推荐裁剪尺寸（平衡显存和精度）
+crop_size: 518
 
-# 训练相关（核心调整batch_size）
-epochs: 90
-batch_size: 2  # 单GPU 8G显存最优选择
-lr: 0.000005       # 配合batch_size=2的基础学习率
-lr_multi: 30.0
+# arguments for training
+epochs: 60
+batch_size: 4 # per GPU x 4 GPUs
+lr: 0.000005
+lr_multi: 40.0
 criterion:
   name: CELoss
   kwargs:
     ignore_index: 255
-conf_thresh: 0.92
+conf_thresh: 0.95
 
-# 模型相关
+# arguments for model
 model: dpt
 backbone: dinov2_small
 lock_backbone: False
-
-# 数据加载相关（核心调整num_workers，代码中修改）
-# 注：num_workers不在YAML，需在DataLoader中手动设置为4
