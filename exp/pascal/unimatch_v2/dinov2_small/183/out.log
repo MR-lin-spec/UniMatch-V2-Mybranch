@@ -48,3 +48,4 @@ bucket_view.sizes() = [21, 64, 1, 1], strides() = [64, 1, 1, 1] (Triggered inter
 [2025-11-15 13:48:42,205][    INFO] Iters: 48, LR: 0.0000597, Total loss: 1.686, Loss x: 3.359, Loss s: 0.013, Mask ratio: 0.035
 [2025-11-15 13:48:45,622][    INFO] Iters: 60, LR: 0.0000596, Total loss: 1.564, Loss x: 3.118, Loss s: 0.011, Mask ratio: 0.028
 [2025-11-15 13:48:49,019][    INFO] Iters: 72, LR: 0.0000596, Total loss: 1.451, Loss x: 2.892, Loss s: 0.009, Mask ratio: 0.024
+[2025-11-15 13:48:52,443][    INFO] Iters: 84, LR: 0.0000595, Total loss: 1.383, Loss x: 2.758, Loss s: 0.008, Mask ratio: 0.020
