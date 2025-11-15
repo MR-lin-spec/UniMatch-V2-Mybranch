@@ -1,6 +1,6 @@
 # arguments for dataset
 dataset: pascal
-data_root: Your/PASCAL/Path
+data_root: /root/autodl-tmp/VOC2012
 nclass: 21
 crop_size: 518
 
