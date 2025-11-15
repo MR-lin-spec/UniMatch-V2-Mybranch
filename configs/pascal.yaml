@@ -1,12 +1,12 @@
 # arguments for dataset
 dataset: pascal
-data_root: Your/PASCAL/Path
+data_root: /DeepLearning_linux/Dataset/VOC2012
 nclass: 21
-crop_size: 518
+crop_size: 476
 
 # arguments for training
 epochs: 60
-batch_size: 4 # per GPU x 4 GPUs
+batch_size: 2 # per GPU x 4 GPUs
 lr: 0.000005
 lr_multi: 40.0
 criterion:
