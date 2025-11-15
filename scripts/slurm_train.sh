@@ -14,7 +14,7 @@ split='366'
 config=configs/${dataset}.yaml
 labeled_id_path=splits/$dataset/$split/labeled.txt
 unlabeled_id_path=splits/$dataset/$split/unlabeled.txt
-save_path=exp/$dataset/$method/$exp/$split
+save_path=/root/autodl-tmp/exp/$dataset/$method/$exp/$split
 
 mkdir -p $save_path
 

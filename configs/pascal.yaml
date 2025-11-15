@@ -1,24 +1,21 @@
-# 数据集相关（核心调整crop_size）
+# 数据集相关（核心调整crop_size为16的整数倍）
 dataset: pascal
-data_root: /DeepLearning_linux/Dataset/VOC2012
+data_root: /root/autodl-tmp/VOC2012
 nclass: 21
-crop_size: 476  # 推荐裁剪尺寸（平衡显存和精度）
+crop_size: 476 # 调整为16×30=480（适配DinoV2的16x16 patch，比476保留更多细节，显存压力可控）
 
-# 训练相关（核心调整batch_size）
+# 训练相关（核心调整batch_size和lr，线性缩放）
 epochs: 90
-batch_size: 2  # 单GPU 8G显存最优选择
-lr: 0.000005       # 配合batch_size=2的基础学习率
-lr_multi: 30.0
+batch_size: 8 # 单RTX 4090 24GB最优选择（dinov2_small+480x480+AMP，显存占用≈19GB）
+lr: 0.00006       # 配合batch_size=24的学习率（原batch=2→lr=5e-6，缩放12倍：5e-6×12=6e-5）
+lr_multi: 30.0  # 分割头学习率倍数不变（分割头需更高lr微调，30倍合理）
 criterion:
   name: CELoss
   kwargs:
-    ignore_index: 255
+    ignore_index: 255  # 适配VOC掩码的忽略标签
 conf_thresh: 0.92
 
-# 模型相关
+# 模型相关（保持原配置，dinov2_small轻量且适配VOC规模）
 model: dpt
 backbone: dinov2_small
-lock_backbone: False
-
-# 数据加载相关（核心调整num_workers，代码中修改）
-# 注：num_workers不在YAML，需在DataLoader中手动设置为4
+lock_backbone: False  # 不锁定骨干，全量微调（VOC数据集足够微调dinov2_small）

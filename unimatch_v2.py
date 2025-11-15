@@ -186,7 +186,7 @@ def main():
         trainset_l,
         batch_size=cfg['batch_size'],  # 每个GPU的批次大小
         pin_memory=True,  # 锁定内存（加速数据传输到GPU）
-        num_workers=4,  # 数据加载线程数
+        num_workers=10,  # 数据加载线程数
         drop_last=True,  # 丢弃最后一个不完整批次（保证批次大小一致）
         sampler=trainsampler_l  # 分布式采样器
     )
@@ -197,7 +197,7 @@ def main():
         trainset_u,
         batch_size=cfg['batch_size'],
         pin_memory=True,
-        num_workers=4,
+        num_workers=10,
         drop_last=True,
         sampler=trainsampler_u
     )
