@@ -30,6 +30,7 @@ class SemiDataset(Dataset):
                 self.ids = f.read().splitlines()
 
     def __getitem__(self, item):
+        gridmask=GridMask(r=0.9, d_min=96, d_max=224, p=0.8)
         id = self.ids[item]
         img = Image.open(os.path.join(self.root, id.split(' ')[0])).convert('RGB')
         if self.mode == 'train_u':
@@ -56,11 +57,14 @@ class SemiDataset(Dataset):
         img_s1 = transforms.RandomGrayscale(p=0.2)(img_s1)
         img_s1 = blur(img_s1, p=0.5)
         cutmix_box1 = obtain_cutmix_box(img_s1.size[0], p=0.5)
+        img_s1=gridmask(img_s1)
+
 
         if random.random() < 0.8:
             img_s2 = transforms.ColorJitter(0.5, 0.5, 0.5, 0.25)(img_s2)
         img_s2 = transforms.RandomGrayscale(p=0.2)(img_s2)
         img_s2 = blur(img_s2, p=0.5)
+        img_s1=gridmask(img_s1)
         cutmix_box2 = obtain_cutmix_box(img_s2.size[0], p=0.5)
 
         ignore_mask = Image.fromarray(np.zeros((mask.size[1], mask.size[0])))
