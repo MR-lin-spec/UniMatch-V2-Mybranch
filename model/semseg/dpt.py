@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 from model.backbone.dinov2 import DINOv2
 from model.util.blocks import FeatureFusionBlock, _make_scratch
-from model.util.moex_old import MoEx  # 新增导入
+from model.util.moex import MoEx
 
 
 def _make_fusion_block(features, use_bn, size=None):
@@ -118,9 +118,12 @@ class DPT(nn.Module):
         features=128, 
         out_channels=[96, 192, 384, 768], 
         use_bn=False,
-        use_moex=False,  # 新增参数：是否使用MoEx
-        moex_norm_type='in',  # 新增参数：MoEx归一化类型
-        moex_swap_prob=0.5,  # 新增参数：MoEx交换概率
+        use_moex=False,
+        moex_norm_type='in',
+        moex_swap_prob=0.5,
+        use_feature_aware_dropout=True,
+        feature_dropout_prob=0.5,
+        feature_importance_method='variance',
     ):
         super(DPT, self).__init__()
         
@@ -136,12 +139,18 @@ class DPT(nn.Module):
         
         self.head = DPTHead(nclass, self.backbone.embed_dim, features, use_bn, out_channels=out_channels)
         
-        self.binomial = torch.distributions.binomial.Binomial(probs=0.5)
+        # 修复：移除硬编码的binomial分布，改为在forward中动态创建
+        self._dropout_prob = 0.5
         
         # MoEx相关参数
         self.use_moex = use_moex
         self.moex_norm_type = moex_norm_type
         self.moex_swap_prob = moex_swap_prob
+        
+        # 特征感知dropout相关参数
+        self.use_feature_aware_dropout = use_feature_aware_dropout
+        self.feature_dropout_prob = feature_dropout_prob
+        self.feature_importance_method = feature_importance_method
         
         # 用于存储交换索引
         self._moex_swap_index = None
@@ -154,7 +163,54 @@ class DPT(nn.Module):
         """设置MoEx交换索引"""
         self._moex_swap_index = swap_index
     
-    def forward(self, x, comp_drop=True):
+    def feature_aware_dropout(self, features, dropout_prob=0.5):
+        """基于特征重要性进行有选择的dropout"""
+        if not self.training or not self.use_feature_aware_dropout:
+            return None
+            
+        # 获取设备信息
+        device = features.device
+        
+        # 计算特征重要性
+        if self.feature_importance_method == 'variance':
+            feature_importance = features.var(dim=1, keepdim=True)
+        elif self.feature_importance_method == 'mean_abs':
+            feature_importance = torch.abs(features).mean(dim=1, keepdim=True)
+        elif self.feature_importance_method == 'max_abs':
+            feature_importance = torch.abs(features).max(dim=1, keepdim=True)[0]
+        else:
+            feature_importance = features.var(dim=1, keepdim=True)
+        
+        # 修复：确保所有操作在同一设备上
+        # 归一化重要性
+        importance_min = feature_importance.min(dim=2, keepdim=True)[0].min(dim=3, keepdim=True)[0]
+        importance_max = feature_importance.max(dim=2, keepdim=True)[0].max(dim=3, keepdim=True)[0]
+        importance_range = importance_max - importance_min + 1e-8
+        importance_norm = (feature_importance - importance_min) / importance_range
+        
+        # 基于重要性的dropout概率调整
+        adjusted_prob = dropout_prob * (1 - importance_norm)
+        
+        # 生成重要性感知的掩码 - 确保在同一设备上
+        dropout_mask = torch.bernoulli(1 - adjusted_prob, generator=None).to(device)
+        
+        return dropout_mask
+    
+    def apply_feature_aware_dropout(self, features, dropout_mask):
+        """应用特征感知dropout"""
+        if dropout_mask is not None:
+            if dropout_mask.dim() == 4 and features.dim() == 4:
+                features = features * dropout_mask
+            elif dropout_mask.dim() == 4 and features.dim() == 3:
+                B, N, D = features.shape
+                H = W = int(N ** 0.5)
+                features_2d = features.transpose(1, 2).reshape(B, D, H, W)
+                features_2d = features_2d * dropout_mask
+                features = features_2d.reshape(B, D, H * W).transpose(1, 2)
+        
+        return features
+
+    def forward(self, x, comp_drop=False):
         """
         Args:
             x: 输入图像
@@ -170,18 +226,14 @@ class DPT(nn.Module):
         if self.use_moex and self.training:
             batch_size = x.size(0)
             
-            # 使用预设的交换索引或创建新的
             if self._moex_swap_index is not None:
                 moex_swap_index = self._moex_swap_index
-                # 清交换索引（避免影响下一次前向传播）
                 self._moex_swap_index = None
             else:
                 moex_swap_index = MoEx.create_swap_index(batch_size, self.moex_swap_prob)
             
-            # 对每个特征层应用MoEx
             moex_features = []
             for feature in features:
-                # 应用MoEx交换
                 feature_moex, mean, std = MoEx.apply(
                     feature, 
                     moex_swap_index, 
@@ -193,14 +245,44 @@ class DPT(nn.Module):
             
             features = moex_features
         
+        # 应用特征感知dropout
+        if self.training and self.use_feature_aware_dropout:
+            processed_features = []
+            for i, feature in enumerate(features):
+                B, N, D = feature.shape
+                H = W = int(N ** 0.5)
+                feature_2d = feature.transpose(1, 2).reshape(B, D, H, W)
+                
+                # 确保设备一致
+                feature_2d = feature_2d.to(x.device)
+                
+                dropout_mask = self.feature_aware_dropout(
+                    feature_2d, 
+                    dropout_prob=self.feature_dropout_prob
+                )
+                
+                if dropout_mask is not None:
+                    feature_2d = self.apply_feature_aware_dropout(feature_2d, dropout_mask)
+                
+                feature_processed = feature_2d.reshape(B, D, H * W).transpose(1, 2)
+                processed_features.append(feature_processed)
+            
+            features = processed_features
+        
         if comp_drop:
             bs, dim = features[0].shape[0], features[0].shape[-1]
             
-            dropout_mask1 = self.binomial.sample((bs // 2, dim)).cuda() * 2.0
+            # 修复：动态获取设备，避免硬编码
+            device = x.device
+            
+            # 修复补偿dropout的设备问题
+            binomial = torch.distributions.binomial.Binomial(probs=0.5)
+            dropout_mask1 = binomial.sample((bs // 2, dim)).to(device) * 2.0
             dropout_mask2 = 2.0 - dropout_mask1
+            
             dropout_prob = 0.5
             num_kept = int(bs // 2 * (1 - dropout_prob))
-            kept_indexes = torch.randperm(bs // 2)[:num_kept]
+            kept_indexes = torch.randperm(bs // 2, device=device)[:num_kept]
             dropout_mask1[kept_indexes, :] = 1.0
             dropout_mask2[kept_indexes, :] = 1.0
             
