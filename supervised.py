@@ -16,7 +16,7 @@ from torch.utils.tensorboard import SummaryWriter
 import yaml
 
 from dataset.semi import SemiDataset
-from model.semseg.dpt import DPT
+from model.semseg.dpt_old import DPT
 from util.classes import CLASSES
 from util.ohem import ProbOhemCrossEntropy2d
 from util.utils import count_params, AverageMeter, intersectionAndUnion, init_log

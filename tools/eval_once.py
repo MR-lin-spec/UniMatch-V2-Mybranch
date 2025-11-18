@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 import torch.distributed as dist
 
 from dataset.semi import SemiDataset
-from model.semseg.dpt import DPT
+from model.semseg.dpt_old import DPT
 from supervised import evaluate
 
 

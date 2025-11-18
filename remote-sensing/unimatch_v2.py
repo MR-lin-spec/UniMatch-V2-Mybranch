@@ -13,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 import yaml
 
 from dataset.semicd import SemiCDDataset
-from model.semseg.dpt import DPT
+from model.semseg.dpt_old import DPT
 from supervised import evaluate
 from util.utils import count_params, init_log, AverageMeter
 from util.dist_helper import setup_distributed
