@@ -4,6 +4,7 @@ import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 import torch
 from torchvision import transforms
+from torch import nn
 
 
 def crop(img, mask, size, ignore_value=255):
@@ -82,3 +83,59 @@ def obtain_cutmix_box(img_size, p=0.5, size_min=0.02, size_max=0.4, ratio_1=0.3,
     mask[y:y + cutmix_h, x:x + cutmix_w] = 1
 
     return mask
+class GridMask(nn.Module):
+    def __init__(self, r=0.6, d_min=96, d_max=224, p=0.8):
+        """
+        Args:
+            r (float): 保留比例，控制掩码中未被删除的区域比例（默认0.6）。
+            d_min, d_max (int): 单元大小d的随机范围（默认96-224）。
+            p (float): 应用GridMask的概率（默认0.8）。
+        """
+        super().__init__()
+        self.r = r
+        self.d_min = d_min
+        self.d_max = d_max
+        self.p = p
+
+    def forward(self, x):
+        """
+        x: 输入图像，可以是PIL.Image.Image对象或tensor，形状为 (C, H, W)
+        返回: 增强后的图像
+        """
+        if torch.rand(1) > self.p:  # 按概率p决定是否应用GridMask
+            return x
+        
+        # 区分PIL Image和Tensor输入
+        is_pil = isinstance(x, Image.Image)
+        
+        # 获取图像尺寸
+        if is_pil:
+            W, H = x.size  # PIL Image的size是(width, height)
+        else:
+            H, W = x.shape[1], x.shape[2]  # Tensor的shape是(C, H, W)
+            
+        d = torch.randint(self.d_min, self.d_max, (1,)).item()  # 随机选择单元大小d
+        l = int(self.r * d)  # 计算每个删除方块的边长
+        delta_x = torch.randint(0, d, (1,)).item()  # 随机偏移量δ_x
+        delta_y = torch.randint(0, d, (1,)).item()  # 随机偏移量δ_y
+        
+        # 生成网格掩码
+        mask = torch.ones(H, W)
+        for i in range(0, H + d, d):
+            for j in range(0, W + d, d):
+                i_start = i + delta_x
+                j_start = j + delta_y
+                i_end = min(i_start + l, H)
+                j_end = min(j_start + l, W)
+                if i_end > i_start and j_end > j_start:
+                    mask[i_start:i_end, j_start:j_end] = 0  # 将区域置为0（删除）
+        
+        # 根据输入类型应用掩码
+        if is_pil:
+            # 对于PIL Image，转换为tensor进行计算，然后转回Image
+            x_tensor = transforms.ToTensor()(x)
+            result_tensor = x_tensor * mask.unsqueeze(0)
+            return transforms.ToPILImage()(result_tensor)
+        else:
+            # 对于Tensor，直接应用掩码
+            return x * mask.unsqueeze(0)  # 应用掩码

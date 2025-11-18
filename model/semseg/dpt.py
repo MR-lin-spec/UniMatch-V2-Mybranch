@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 from model.backbone.dinov2 import DINOv2
 from model.util.blocks import FeatureFusionBlock, _make_scratch
-from model.util.moex import MoEx  # 新增导入
+from model.util.moex_old import MoEx  # 新增导入
 
 
 def _make_fusion_block(features, use_bn, size=None):
@@ -154,7 +154,7 @@ class DPT(nn.Module):
         """设置MoEx交换索引"""
         self._moex_swap_index = swap_index
     
-    def forward(self, x, comp_drop=True):
+    def forward(self, x, comp_drop=False):
         """
         Args:
             x: 输入图像

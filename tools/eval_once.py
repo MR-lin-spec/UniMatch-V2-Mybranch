@@ -33,6 +33,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True)
     parser.add_argument('--gpu', type=int, default=0)
+    parser.add_argument('--checkpoint', type=str, default=None, help='path to checkpoint .pth to load (overrides auto-search)')
     args = parser.parse_args()
 
     cfg = yaml.load(open(args.config, 'r'), Loader=yaml.Loader)
@@ -49,6 +50,57 @@ if __name__ == '__main__':
         dist.all_reduce = lambda x: x
     except Exception:
         pass
+
+    # Try to load checkpoint: use explicit --checkpoint if provided,
+    # otherwise search for most recent latest.pth or best.pth under exp/
+    ckpt_path = None
+    if args.checkpoint is not None:
+        if os.path.exists(args.checkpoint):
+            ckpt_path = args.checkpoint
+        else:
+            raise FileNotFoundError(f"Checkpoint {args.checkpoint} not found")
+    else:
+        candidates = []
+        for root, dirs, files in os.walk(os.path.join(repo_root, 'exp')):
+            for name in files:
+                if name in ('latest.pth', 'best.pth'):
+                    candidates.append(os.path.join(root, name))
+        if len(candidates) > 0:
+            # pick most recently modified
+            ckpt_path = max(candidates, key=lambda p: os.path.getmtime(p))
+    if ckpt_path is not None:
+        print(f'Loading checkpoint: {ckpt_path}')
+        try:
+            ckpt = torch.load(ckpt_path, map_location='cpu')
+        except Exception as e:
+            # Some torch versions changed torch.load default to weights_only=True.
+            # Retry with weights_only=False for full checkpoint load (trusted checkpoints only).
+            try:
+                ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+            except TypeError:
+                # Older torch does not support weights_only arg, re-raise original
+                raise e
+        # checkpoint may be a dict with 'model' or 'model_ema' key, or be a bare state_dict
+        if isinstance(ckpt, dict):
+            if 'model' in ckpt:
+                state_dict = ckpt['model']
+            elif 'model_ema' in ckpt:
+                state_dict = ckpt['model_ema']
+            else:
+                # assume it's a plain state_dict
+                state_dict = ckpt
+        else:
+            state_dict = ckpt
+
+        # remove 'module.' prefix if present (from DDP)
+        new_state = {}
+        for k, v in state_dict.items():
+            new_key = k
+            if k.startswith('module.'):
+                new_key = k[len('module.'):]
+            new_state[new_key] = v
+        model.load_state_dict(new_state, strict=False)
+        print('Checkpoint loaded into model')
 
     valset = SemiDataset(cfg['dataset'], cfg['data_root'], 'val')
     valloader = DataLoader(valset, batch_size=1, pin_memory=True, num_workers=1, drop_last=False)
