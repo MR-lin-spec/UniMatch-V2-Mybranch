@@ -47,13 +47,13 @@ def evaluate(model, loader, mode, cfg, multiplier=None):
             if mode == 'sliding_window':
                 grid = cfg['crop_size']
                 b, _, h, w = img.shape
-                final = torch.zeros(b, 19, h, w).cuda()
+                final = torch.zeros(b, cfg['nclass'], h, w).cuda()
                 
                 row = 0
                 while row < h:
                     col = 0
                     while col < w:
-                        pred = model(img[:, :, row: row + grid, col: col + grid])
+                        pred = model(img[:, :, row: row + grid, col: col + grid], comp_drop=False)
                         final[:, :, row: row + grid, col: col + grid] += pred.softmax(dim=1)
                         if col == w - grid:
                             break
@@ -75,15 +75,31 @@ def evaluate(model, loader, mode, cfg, multiplier=None):
                         new_h, new_w = int(ori_h / multiplier + 0.5) * multiplier, int(ori_w / multiplier + 0.5) * multiplier
                     img = F.interpolate(img, (new_h, new_w), mode='bilinear', align_corners=True)
                 
-                pred = model(img)
+                pred = model(img, comp_drop=False)
             
                 if multiplier is not None:
                     pred = F.interpolate(pred, (ori_h, ori_w), mode='bilinear', align_corners=True)
             
             pred = pred.argmax(dim=1)
 
-            intersection, union, target = \
-                intersectionAndUnion(pred.cpu().numpy(), mask.numpy(), cfg['nclass'], 255)
+            # Ensure pred and mask have matching batch/spatial dims before computing intersection/union
+            pred_np = pred.cpu().numpy()
+            # mask may be batched (B,H,W) or single (H,W); ensure numpy
+            mask_np = mask.numpy()
+
+            # If one has batch dim and the other doesn't, expand the missing dim when batch==1
+            if pred_np.ndim == 3 and mask_np.ndim == 2:
+                mask_np = np.expand_dims(mask_np, 0)
+            elif pred_np.ndim == 2 and mask_np.ndim == 3:
+                pred_np = np.expand_dims(pred_np, 0)
+
+            # After potential expansion, shapes must match
+            if pred_np.shape != mask_np.shape:
+                raise AssertionError('Prediction and target shapes do not match for IoU: pred %s vs mask %s' % (
+                    str(pred_np.shape), str(mask_np.shape)
+                ))
+
+            intersection, union, target = intersectionAndUnion(pred_np, mask_np, cfg['nclass'], 255)
 
             reduced_intersection = torch.from_numpy(intersection).cuda()
             reduced_union = torch.from_numpy(union).cuda()

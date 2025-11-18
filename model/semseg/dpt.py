@@ -5,6 +5,7 @@ import torch.nn.functional as F
 
 from model.backbone.dinov2 import DINOv2
 from model.util.blocks import FeatureFusionBlock, _make_scratch
+from model.util.moex import MoEx  # 新增导入
 
 
 def _make_fusion_block(features, use_bn, size=None):
@@ -117,6 +118,9 @@ class DPT(nn.Module):
         features=128, 
         out_channels=[96, 192, 384, 768], 
         use_bn=False,
+        use_moex=True,  # 新增参数：是否使用MoEx
+        moex_norm_type='in',  # 新增参数：MoEx归一化类型
+        moex_swap_prob=0.5,  # 新增参数：MoEx交换概率
     ):
         super(DPT, self).__init__()
         
@@ -134,16 +138,60 @@ class DPT(nn.Module):
         
         self.binomial = torch.distributions.binomial.Binomial(probs=0.5)
         
+        # MoEx相关参数
+        self.use_moex = use_moex
+        self.moex_norm_type = moex_norm_type
+        self.moex_swap_prob = moex_swap_prob
+        
+        # 用于存储交换索引
+        self._moex_swap_index = None
+    
     def lock_backbone(self):
         for p in self.backbone.parameters():
             p.requires_grad = False
+            
+    def set_moex_swap_index(self, swap_index):
+        """设置MoEx交换索引"""
+        self._moex_swap_index = swap_index
     
-    def forward(self, x, comp_drop=False):
+    def forward(self, x, comp_drop=True):
+        """
+        Args:
+            x: 输入图像
+            comp_drop: 是否使用补偿dropout
+        """
         patch_h, patch_w = x.shape[-2] // 14, x.shape[-1] // 14
         
         features = self.backbone.get_intermediate_layers(
             x, self.intermediate_layer_idx[self.encoder_size]
         )
+        
+        # 应用MoEx交换（如果启用）
+        if self.use_moex and self.training:
+            batch_size = x.size(0)
+            
+            # 使用预设的交换索引或创建新的
+            if self._moex_swap_index is not None:
+                moex_swap_index = self._moex_swap_index
+                # 清交换索引（避免影响下一次前向传播）
+                self._moex_swap_index = None
+            else:
+                moex_swap_index = MoEx.create_swap_index(batch_size, self.moex_swap_prob)
+            
+            # 对每个特征层应用MoEx
+            moex_features = []
+            for feature in features:
+                # 应用MoEx交换
+                feature_moex, mean, std = MoEx.apply(
+                    feature, 
+                    moex_swap_index, 
+                    norm_type=self.moex_norm_type,
+                    epsilon=1e-5,
+                    positive_only=False
+                )
+                moex_features.append(feature_moex)
+            
+            features = moex_features
         
         if comp_drop:
             bs, dim = features[0].shape[0], features[0].shape[-1]
@@ -158,7 +206,7 @@ class DPT(nn.Module):
             
             dropout_mask = torch.cat((dropout_mask1, dropout_mask2))
             
-            features = (feature * dropout_mask.unsqueeze(1) for feature in features)
+            features = [feature * dropout_mask.unsqueeze(1) for feature in features]
             
             out = self.head(features, patch_h, patch_w)
             

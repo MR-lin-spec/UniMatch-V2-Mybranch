@@ -2,7 +2,7 @@
 dataset: pascal
 data_root: /root/autodl-tmp/VOC2012
 nclass: 21
-crop_size: 518
+crop_size: 476
 
 # arguments for training
 epochs: 60
