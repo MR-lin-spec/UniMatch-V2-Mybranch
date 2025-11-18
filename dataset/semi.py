@@ -1,4 +1,4 @@
-from dataset.transform import *
+from .transform import *
 
 from copy import deepcopy
 import math
@@ -11,13 +11,13 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-
 class SemiDataset(Dataset):
-    def __init__(self, name, root, mode, size=None, id_path=None, nsample=None):
+    def __init__(self, name, root, mode, size=None, id_path=None, nsample=None, use_augmix=True):
         self.name = name
         self.root = root
         self.mode = mode
         self.size = size
+        self.use_augmix = use_augmix  # 新增：控制是否使用AugMix
         
         if mode == 'train_l' or mode == 'train_u':
             with open(id_path, 'r') as f:
@@ -52,18 +52,22 @@ class SemiDataset(Dataset):
         
         img_w, img_s1, img_s2 = deepcopy(img), deepcopy(img), deepcopy(img)
 
+        # 新增：在强增强分支应用AugMix
+        if self.use_augmix and random.random() < 0.5:
+            img_s1 = augmix(img_s1, k=3, alpha=1.0, p=1.0)
+            img_s2 = augmix(img_s2, k=3, alpha=1.0, p=1.0)
+
         if random.random() < 0.8:
             img_s1 = transforms.ColorJitter(0.5, 0.5, 0.5, 0.25)(img_s1)
         img_s1 = transforms.RandomGrayscale(p=0.2)(img_s1)
         img_s1 = blur(img_s1, p=0.5)
-        img_s1 = gridmask(img_s1)
         cutmix_box1 = obtain_cutmix_box(img_s1.size[0], p=0.5)
+       
 
         if random.random() < 0.8:
             img_s2 = transforms.ColorJitter(0.5, 0.5, 0.5, 0.25)(img_s2)
         img_s2 = transforms.RandomGrayscale(p=0.2)(img_s2)
         img_s2 = blur(img_s2, p=0.5)
-        img_s2 = gridmask(img_s2)
         cutmix_box2 = obtain_cutmix_box(img_s2.size[0], p=0.5)
 
         ignore_mask = Image.fromarray(np.zeros((mask.size[1], mask.size[0])))

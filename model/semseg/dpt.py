@@ -118,7 +118,7 @@ class DPT(nn.Module):
         features=128, 
         out_channels=[96, 192, 384, 768], 
         use_bn=False,
-        use_moex=True,  # 新增参数：是否使用MoEx
+        use_moex=False,  # 新增参数：是否使用MoEx
         moex_norm_type='in',  # 新增参数：MoEx归一化类型
         moex_swap_prob=0.5,  # 新增参数：MoEx交换概率
     ):
@@ -154,7 +154,7 @@ class DPT(nn.Module):
         """设置MoEx交换索引"""
         self._moex_swap_index = swap_index
     
-    def forward(self, x, comp_drop=False):
+    def forward(self, x, comp_drop=True):
         """
         Args:
             x: 输入图像

@@ -5,6 +5,9 @@ from PIL import Image, ImageOps, ImageFilter
 import torch
 from torchvision import transforms
 from torch import nn
+from torch.distributions import Dirichlet, Beta
+import torchvision.transforms as T
+from torchvision.transforms import functional as TF
 
 
 def crop(img, mask, size, ignore_value=255):
@@ -139,3 +142,185 @@ class GridMask(nn.Module):
         else:
             # 对于Tensor，直接应用掩码
             return x * mask.unsqueeze(0)  # 应用掩码
+# 定义常用的图像增强操作集合
+class AugMixOperations:
+    def __init__(self):
+        self.operations = [
+            self.rotate,
+            self.solarize,
+            self.color,
+            self.contrast,
+            self.brightness,
+            self.sharpness,
+            self.shear_x,
+            self.shear_y,
+            self.translate_x,
+            self.translate_y,
+        ]
+    
+    def rotate(self, x, magnitude):
+        return TF.rotate(x, magnitude * 30)
+    
+    def solarize(self, x, magnitude):
+        return TF.solarize(x, magnitude * 256)
+    
+    def color(self, x, magnitude):
+        return TF.adjust_saturation(x, 1 + magnitude * 0.9)
+    
+    def contrast(self, x, magnitude):
+        return TF.adjust_contrast(x, 1 + magnitude * 0.9)
+    
+    def brightness(self, x, magnitude):
+        return TF.adjust_brightness(x, 1 + magnitude * 0.9)
+    
+    def sharpness(self, x, magnitude):
+        return TF.adjust_sharpness(x, 1 + magnitude * 0.9)
+    
+    def shear_x(self, x, magnitude):
+        return TF.affine(x, angle=0, translate=(0, 0), scale=1, shear=(magnitude * 45, 0))
+    
+    def shear_y(self, x, magnitude):
+        return TF.affine(x, angle=0, translate=(0, 0), scale=1, shear=(0, magnitude * 45))
+    
+    def translate_x(self, x, magnitude):
+        return TF.affine(x, angle=0, translate=(int(magnitude * 150), 0), scale=1, shear=0)
+    
+    def translate_y(self, x, magnitude):
+        return TF.affine(x, angle=0, translate=(0, int(magnitude * 150)), scale=1, shear=0)
+
+# 图像预处理转换函数
+def preprocess_for_augmix(img):
+    """将PIL图像转换为tensor并标准化"""
+    if isinstance(img, Image.Image):
+        # 转换为tensor
+        img_tensor = transforms.ToTensor()(img)
+        # 标准化
+        img_tensor = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])(img_tensor)
+        return img_tensor
+    return img
+
+def postprocess_from_augmix(img_tensor):
+    """将tensor转换回PIL图像"""
+    if isinstance(img_tensor, torch.Tensor):
+        # 反标准化
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+        img_tensor = img_tensor * std + mean
+        # 限制到[0,1]范围
+        img_tensor = torch.clamp(img_tensor, 0, 1)
+        # 转换为PIL图像
+        img_pil = transforms.ToPILImage()(img_tensor)
+        return img_pil
+    return img_tensor
+
+# AugMix 增强函数（保持尺寸不变）
+def augment_and_mix(x, operations, k=3, alpha=1.0):
+    """
+    x: 输入图像，可以是PIL.Image或tensor
+    返回: 增强后的图像，尺寸与输入相同
+    """
+    # 记录原始类型和尺寸
+    is_pil = isinstance(x, Image.Image)
+    original_size = x.size if is_pil else x.shape[-2:]
+    
+    # 转换为tensor进行AugMix处理
+    if is_pil:
+        x_tensor = preprocess_for_augmix(x)
+    else:
+        x_tensor = x
+    
+    aug = torch.zeros_like(x_tensor)
+    
+    # 采样混合权重
+    dirichlet = Dirichlet(torch.ones(k) * alpha)
+    weights = dirichlet.sample()
+    
+    for i in range(k):
+        # 临时转换为PIL进行空间变换（如果需要）
+        temp_img = x_tensor.clone()
+        if is_pil:
+            temp_img_pil = postprocess_from_augmix(temp_img)
+        else:
+            # 对于tensor，直接使用torchvision的functional
+            temp_img_pil = None
+        
+        # 采样操作和强度
+        op = random.choice(operations.operations)
+        magnitude = random.random()
+        
+        # 应用操作
+        if is_pil:
+            x_aug_pil = op(temp_img_pil, magnitude)
+            x_aug = preprocess_for_augmix(x_aug_pil)
+        else:
+            # 对于tensor，直接应用操作
+            x_aug = op(temp_img, magnitude)
+        
+        aug = aug + weights[i] * x_aug
+    
+    # 采样插值权重
+    beta = Beta(alpha, alpha)
+    m = beta.sample()
+    
+    # 与原始图像插值
+    augmix_tensor = m * x_tensor + (1 - m) * aug
+    
+    # 转换回原始格式
+    if is_pil:
+        result = postprocess_from_augmix(augmix_tensor)
+        # 确保尺寸一致
+        if result.size != original_size:
+            result = result.resize(original_size, Image.BILINEAR)
+    else:
+        result = augmix_tensor
+        # 确保尺寸一致
+        if result.shape[-2:] != original_size:
+            result = F.interpolate(result.unsqueeze(0), size=original_size, mode='bilinear', align_corners=False).squeeze(0)
+    
+    return result
+
+# 简化的AugMix增强函数，便于在数据加载器中使用
+def augmix(img, k=3, alpha=1.0, p=0.5):
+    """
+    即插即用的AugMix增强
+    Args:
+        img: 输入图像(PIL.Image或tensor)
+        k: 操作链数量
+        alpha: Dirichlet分布参数
+        p: 应用概率
+    Returns:
+        增强后的图像，尺寸不变
+    """
+    if random.random() > p:
+        return img
+    
+    operations = AugMixOperations()
+    return augment_and_mix(img, operations, k, alpha)
+
+# JS 散度计算
+def jensen_shannon_divergence(p, q, r):
+    m = 0.5 * (p + q)
+    js_p = 0.5 * (F.kl_div(m.log(), p, reduction='batchmean') + F.kl_div(m.log(), q, reduction='batchmean'))
+    m = 0.5 * (p + r)
+    js_r = 0.5 * (F.kl_div(m.log(), p, reduction='batchmean') + F.kl_div(m.log(), r, reduction='batchmean'))
+    return (js_p + js_r) / 2
+
+# 完整的 AugMix 训练损失
+def augmix_loss(model, x, y, operations, k=3, alpha=1.0, lambda_js=1.0):
+    # 原始图像的预测
+    logits_orig = model(x)
+    loss_orig = F.cross_entropy(logits_orig, y)
+    # 生成两个 AugMix 样本
+    x_aug1 = augment_and_mix(x, operations, k, alpha)
+    x_aug2 = augment_and_mix(x, operations, k, alpha)
+    # 增强样本的预测
+    logits_aug1 = model(x_aug1)
+    logits_aug2 = model(x_aug2)
+    # 计算 JS 散度正则项
+    p = F.softmax(logits_orig, dim=1)
+    q = F.softmax(logits_aug1, dim=1)
+    r = F.softmax(logits_aug2, dim=1)
+    js_loss = jensen_shannon_divergence(p, q, r)
+    # 总损失
+    total_loss = loss_orig + lambda_js * js_loss
+    return total_loss
