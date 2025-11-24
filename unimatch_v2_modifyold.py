@@ -21,7 +21,7 @@ from util.utils import count_params, init_log, AverageMeter
 from util.dist_helper import setup_distributed
 
 
-parser = argparse.ArgumentParser(description='Reproduced FixMatch with an EMA Teacher for Semi-Supervised Semantic Segmentation')
+parser = argparse.ArgumentParser(description='UniMatch V2: Pushing the Limit of Semi-Supervised Semantic Segmentation')
 parser.add_argument('--config', type=str, required=True)
 parser.add_argument('--labeled-id-path', type=str, required=True)
 parser.add_argument('--unlabeled-id-path', type=str, required=True)
@@ -58,10 +58,9 @@ def main():
         'giant': {'encoder_size': 'giant', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
     }
     model = DPT(**{**model_configs[cfg['backbone'].split('_')[-1]], 'nclass': cfg['nclass']})
-    
     state_dict = torch.load(f'./pretrained/{cfg["backbone"]}.pth')
     model.backbone.load_state_dict(state_dict)
-    
+        
     if cfg['lock_backbone']:
         model.lock_backbone()
     
@@ -97,9 +96,9 @@ def main():
         criterion_l = ProbOhemCrossEntropy2d(**cfg['criterion']['kwargs']).cuda(local_rank)
     else:
         raise NotImplementedError('%s criterion is not implemented' % cfg['criterion']['name'])
-    
+
     criterion_u = nn.CrossEntropyLoss(reduction='none').cuda(local_rank)
-    
+
     trainset_u = SemiDataset(
         cfg['dataset'], cfg['data_root'], 'train_u', cfg['crop_size'], args.unlabeled_id_path
     )
@@ -112,12 +111,12 @@ def main():
     
     trainsampler_l = torch.utils.data.distributed.DistributedSampler(trainset_l)
     trainloader_l = DataLoader(
-        trainset_l, batch_size=cfg['batch_size'], pin_memory=True, num_workers=4, drop_last=True, sampler=trainsampler_l
+        trainset_l, batch_size=cfg['batch_size'], pin_memory=True, num_workers=10, drop_last=True, sampler=trainsampler_l
     )
     
     trainsampler_u = torch.utils.data.distributed.DistributedSampler(trainset_u)
     trainloader_u = DataLoader(
-        trainset_u, batch_size=cfg['batch_size'], pin_memory=True, num_workers=4, drop_last=True, sampler=trainsampler_u
+        trainset_u, batch_size=cfg['batch_size'], pin_memory=True, num_workers=10, drop_last=True, sampler=trainsampler_u
     )
     
     valsampler = torch.utils.data.distributed.DistributedSampler(valset)
@@ -131,7 +130,7 @@ def main():
     epoch = -1
     
     if os.path.exists(os.path.join(args.save_path, 'latest.pth')):
-        checkpoint = torch.load(os.path.join(args.save_path, 'latest.pth'))
+        checkpoint = torch.load(os.path.join(args.save_path, 'latest.pth'), map_location='cpu')
         model.load_state_dict(checkpoint['model'])
         model_ema.load_state_dict(checkpoint['model_ema'])
         optimizer.load_state_dict(checkpoint['optimizer'])
@@ -162,38 +161,48 @@ def main():
         model.train()
 
         for i, ((img_x, mask_x),
-                (img_u_w, img_u_s, _, ignore_mask, cutmix_box, _)) in enumerate(loader):
+                (img_u_w, img_u_s1, img_u_s2, ignore_mask, cutmix_box1, cutmix_box2)) in enumerate(loader):
             
             img_x, mask_x = img_x.cuda(), mask_x.cuda()
-            img_u_w, img_u_s = img_u_w.cuda(), img_u_s.cuda()
-            ignore_mask, cutmix_box = ignore_mask.cuda(), cutmix_box.cuda()
-
+            img_u_w, img_u_s1, img_u_s2 = img_u_w.cuda(), img_u_s1.cuda(), img_u_s2.cuda()
+            ignore_mask, cutmix_box1, cutmix_box2 = ignore_mask.cuda(), cutmix_box1.cuda(), cutmix_box2.cuda()
+            
             with torch.no_grad():
                 pred_u_w = model_ema(img_u_w).detach()
                 conf_u_w = pred_u_w.softmax(dim=1).max(dim=1)[0]
                 mask_u_w = pred_u_w.argmax(dim=1)
             
-            img_u_s[cutmix_box.unsqueeze(1).expand(img_u_s.shape) == 1] = img_u_s.flip(0)[cutmix_box.unsqueeze(1).expand(img_u_s.shape) == 1]
+            img_u_s1[cutmix_box1.unsqueeze(1).expand(img_u_s1.shape) == 1] = img_u_s1.flip(0)[cutmix_box1.unsqueeze(1).expand(img_u_s1.shape) == 1]
+            img_u_s2[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1] = img_u_s2.flip(0)[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1]
             
-            num_lb, num_ulb = img_x.shape[0], img_u_s.shape[0]
-            pred_x, pred_u_s = model(torch.cat((img_x, img_u_s))).split([num_lb, num_ulb])
+            pred_x = model(img_x)
+            pred_u_s1, pred_u_s2 = model(torch.cat((img_u_s1, img_u_s2)), comp_drop=True).chunk(2)
             
-            mask_u_w_cutmixed, conf_u_w_cutmixed, ignore_mask_cutmixed = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()
+            mask_u_w_cutmixed1, conf_u_w_cutmixed1, ignore_mask_cutmixed1 = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()
+            mask_u_w_cutmixed2, conf_u_w_cutmixed2, ignore_mask_cutmixed2 = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()
+
+            mask_u_w_cutmixed1[cutmix_box1 == 1] = mask_u_w.flip(0)[cutmix_box1 == 1]
+            conf_u_w_cutmixed1[cutmix_box1 == 1] = conf_u_w.flip(0)[cutmix_box1 == 1]
+            ignore_mask_cutmixed1[cutmix_box1 == 1] = ignore_mask.flip(0)[cutmix_box1 == 1]
             
-            mask_u_w_cutmixed[cutmix_box == 1] = mask_u_w.flip(0)[cutmix_box == 1]
-            conf_u_w_cutmixed[cutmix_box == 1] = conf_u_w.flip(0)[cutmix_box == 1]
-            ignore_mask_cutmixed[cutmix_box == 1] = ignore_mask.flip(0)[cutmix_box == 1]
+            mask_u_w_cutmixed2[cutmix_box2 == 1] = mask_u_w.flip(0)[cutmix_box2 == 1]
+            conf_u_w_cutmixed2[cutmix_box2 == 1] = conf_u_w.flip(0)[cutmix_box2 == 1]
+            ignore_mask_cutmixed2[cutmix_box2 == 1] = ignore_mask.flip(0)[cutmix_box2 == 1]
             
             loss_x = criterion_l(pred_x, mask_x)
 
-            loss_u_s = criterion_u(pred_u_s, mask_u_w_cutmixed)
-            loss_u_s = loss_u_s * ((conf_u_w_cutmixed >= cfg['conf_thresh']) & (ignore_mask_cutmixed != 255))
-            loss_u_s = loss_u_s.sum() / (ignore_mask_cutmixed != 255).sum().item()
+            loss_u_s1 = criterion_u(pred_u_s1, mask_u_w_cutmixed1)
+            loss_u_s1 = loss_u_s1 * ((conf_u_w_cutmixed1 >= cfg['conf_thresh']) & (ignore_mask_cutmixed1 != 255))
+            loss_u_s1 = loss_u_s1.sum() / (ignore_mask_cutmixed1 != 255).sum().item()
+            
+            loss_u_s2 = criterion_u(pred_u_s2, mask_u_w_cutmixed2)
+            loss_u_s2 = loss_u_s2 * ((conf_u_w_cutmixed2 >= cfg['conf_thresh']) & (ignore_mask_cutmixed2 != 255))
+            loss_u_s2 = loss_u_s2.sum() / (ignore_mask_cutmixed2 != 255).sum().item()
+            
+            loss_u_s = (loss_u_s1 + loss_u_s2) / 2.0
             
             loss = (loss_x + loss_u_s) / 2.0
-
-            torch.distributed.barrier()
-
+            
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -242,7 +251,7 @@ def main():
             for i, iou in enumerate(iou_class):
                 writer.add_scalar('eval/%s_IoU' % (CLASSES[cfg['dataset']][i]), iou, epoch)
                 writer.add_scalar('eval/%s_IoU_ema' % (CLASSES[cfg['dataset']][i]), iou_class_ema[i], epoch)
-        
+
         is_best = mIoU >= previous_best
         
         previous_best = max(mIoU, previous_best)

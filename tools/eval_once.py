@@ -11,8 +11,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torch.distributed as dist
 
-from dataset.semi import SemiDataset
-from model.semseg.dpt import DPT
+from dataset.semi_modifyold import SemiDataset
+from model.semseg.dpt_modifyold import DPT
 from supervised import evaluate
 
 

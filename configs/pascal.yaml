@@ -6,14 +6,16 @@ crop_size: 476
 
 # arguments for training
 epochs: 60
-batch_size: 4 # per GPU x 4 GPUs
-lr: 0.000005
+batch_size: 6 # per GPU x 4 GPUs
+lr:  0.000005
 lr_multi: 40.0
 criterion:
   name: CELoss
   kwargs:
     ignore_index: 255
 conf_thresh: 0.95
+jsd_weight: 0.1  # 建议从 0.1 开始尝试，如 0.05, 0.1, 0.2
+conf_thresh: 0.95   # 初始可设高一点，避免噪声伪标签
 
 # arguments for model
 model: dpt

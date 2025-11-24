@@ -1,21 +1,24 @@
-from .transform import *
+from .transform_modifyold import *
+
 from copy import deepcopy
 import math
 import numpy as np
 import os
 import random
+
 from PIL import Image
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
 class SemiDataset(Dataset):
-    def __init__(self, name, root, mode, size=None, id_path=None, nsample=None, use_augmix=False):
+    def __init__(self, name, root, mode, size=None, id_path=None, nsample=None, use_augmix=True):
         self.name = name
         self.root = root
         self.mode = mode
         self.size = size
-        self.use_augmix = use_augmix
+        self.use_augmix = use_augmix  # 新增：控制是否使用AugMix
+        
         if mode == 'train_l' or mode == 'train_u':
             with open(id_path, 'r') as f:
                 self.ids = f.read().splitlines()
@@ -27,14 +30,14 @@ class SemiDataset(Dataset):
                 self.ids = f.read().splitlines()
 
     def __getitem__(self, item):
-        gridmask = GridMask(r=0.9, d_min=96, d_max=224, p=0.8)
+        gridmask=GridMask(r=0.9, d_min=96, d_max=224, p=0.8)
         id = self.ids[item]
         img = Image.open(os.path.join(self.root, id.split(' ')[0])).convert('RGB')
         if self.mode == 'train_u':
             mask = Image.fromarray(np.zeros((img.size[1], img.size[0]), dtype=np.uint8))
         else:
-            mask = Image.fromarray(np.array(Image.open(os.path.join(self.root, id.split(' ')[1]))))
-
+            mask = Image.fromarray(np.array(Image.open(os.path.join(self.root, id.split(' ')[1])))) 
+        
         if self.mode == 'val':
             img, mask = normalize(img, mask)
             return img, mask, id
@@ -46,31 +49,32 @@ class SemiDataset(Dataset):
 
         if self.mode == 'train_l':
             return normalize(img, mask)
-
+        
         img_w, img_s1, img_s2 = deepcopy(img), deepcopy(img), deepcopy(img)
 
-        # ✅ 使用新的 augmix_chain（无混合）
-        if self.use_augmix:
-            if random.random() < 0.5:
-                img_s1 = augmix_chain(img_s1, k=3, p_apply=1.0)
-            if random.random() < 0.5:
-                img_s2 = augmix_chain(img_s2, k=3, p_apply=1.0)
+        # 新增：在强增强分支应用AugMix
+        if self.use_augmix and random.random() < 0.5:
+            img_s1 = augmix(img_s1, k=3, alpha=1.0, p=1.0)
+            img_s2 = augmix(img_s2, k=3, alpha=1.0, p=1.0)
 
         if random.random() < 0.8:
             img_s1 = transforms.ColorJitter(0.5, 0.5, 0.5, 0.25)(img_s1)
-            img_s1 = transforms.RandomGrayscale(p=0.2)(img_s1)
-            img_s1 = blur(img_s1, p=0.5)
+        img_s1 = transforms.RandomGrayscale(p=0.2)(img_s1)
+        img_s1 = blur(img_s1, p=0.5)
         cutmix_box1 = obtain_cutmix_box(img_s1.size[0], p=0.5)
+       
 
         if random.random() < 0.8:
             img_s2 = transforms.ColorJitter(0.5, 0.5, 0.5, 0.25)(img_s2)
-            img_s2 = transforms.RandomGrayscale(p=0.2)(img_s2)
-            img_s2 = blur(img_s2, p=0.5)
+        img_s2 = transforms.RandomGrayscale(p=0.2)(img_s2)
+        img_s2 = blur(img_s2, p=0.5)
         cutmix_box2 = obtain_cutmix_box(img_s2.size[0], p=0.5)
 
         ignore_mask = Image.fromarray(np.zeros((mask.size[1], mask.size[0])))
+
         img_s1, ignore_mask = normalize(img_s1, ignore_mask)
         img_s2 = normalize(img_s2)
+
         mask = torch.from_numpy(np.array(mask)).long()
         ignore_mask[mask == 254] = 255
 

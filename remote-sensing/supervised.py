@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 import yaml
 
 from dataset.semicd import SemiCDDataset
-from model.semseg.dpt import DPT
+from model.semseg.dpt_modifyold import DPT
 from util.utils import count_params, AverageMeter, intersectionAndUnion, init_log
 from util.dist_helper import setup_distributed
 

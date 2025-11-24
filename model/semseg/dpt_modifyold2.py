@@ -8,13 +8,7 @@ from model.util.moex import MoEx
 
 def _make_fusion_block(features, use_bn, size=None):
     return FeatureFusionBlock(
-        features,
-        nn.ReLU(False),
-        deconv=False,
-        bn=use_bn,
-        expand=False,
-        align_corners=True,
-        size=size,
+        features, nn.ReLU(False), deconv=False, bn=use_bn, expand=False, align_corners=True, size=size,
     )
 
 class DPTHead(nn.Module):
@@ -27,17 +21,47 @@ class DPTHead(nn.Module):
         out_channels=[256, 512, 1024, 1024],
     ):
         super(DPTHead, self).__init__()
-        self.projects = nn.ModuleList([
-            nn.Conv2d(in_channels=in_channels, out_channels=out_channel, kernel_size=1, stride=1, padding=0)
-            for out_channel in out_channels
-        ])
-        self.resize_layers = nn.ModuleList([
-            nn.ConvTranspose2d(in_channels=out_channels[0], out_channels=out_channels[0], kernel_size=4, stride=4, padding=0),
-            nn.ConvTranspose2d(in_channels=out_channels[1], out_channels=out_channels[1], kernel_size=2, stride=2, padding=0),
-            nn.Identity(),
-            nn.Conv2d(in_channels=out_channels[3], out_channels=out_channels[3], kernel_size=3, stride=2, padding=1)
-        ])
-        self.scratch = _make_scratch(out_channels, features, groups=1, expand=False)
+        self.projects = nn.ModuleList(
+            [
+                nn.Conv2d(
+                    in_channels=in_channels,
+                    out_channels=out_channel,
+                    kernel_size=1,
+                    stride=1,
+                    padding=0,
+                )
+                for out_channel in out_channels
+            ]
+        )
+        self.resize_layers = nn.ModuleList(
+            [
+                nn.ConvTranspose2d(
+                    in_channels=out_channels[0],
+                    out_channels=out_channels[0],
+                    kernel_size=4,
+                    stride=4,
+                    padding=0,
+                ),
+                nn.ConvTranspose2d(
+                    in_channels=out_channels[1],
+                    out_channels=out_channels[1],
+                    kernel_size=2,
+                    stride=2,
+                    padding=0,
+                ),
+                nn.Identity(),
+                nn.Conv2d(
+                    in_channels=out_channels[3],
+                    out_channels=out_channels[3],
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                ),
+            ]
+        )
+        self.scratch = _make_scratch(
+            out_channels, features, groups=1, expand=False,
+        )
         self.scratch.stem_transpose = None
         self.scratch.refinenet1 = _make_fusion_block(features, use_bn)
         self.scratch.refinenet2 = _make_fusion_block(features, use_bn)
@@ -46,7 +70,7 @@ class DPTHead(nn.Module):
         self.scratch.output_conv = nn.Sequential(
             nn.Conv2d(features, features, kernel_size=3, stride=1, padding=1),
             nn.ReLU(True),
-            nn.Conv2d(features, nclass, kernel_size=1, stride=1, padding=0)
+            nn.Conv2d(features, nclass, kernel_size=1, stride=1, padding=0),
         )
 
     def forward(self, out_features, patch_h, patch_w):
@@ -71,92 +95,109 @@ class DPTHead(nn.Module):
 class DPT(nn.Module):
     def __init__(
         self,
-        encoder_size='base',
+        encoder_size="base",
         nclass=21,
         features=128,
         out_channels=[96, 192, 384, 768],
         use_bn=False,
         use_moex=False,
-        moex_norm_type='in',
+        moex_norm_type="in",
         moex_swap_prob=0.5,
         use_feature_aware_dropout=True,
-        feature_dropout_prob=0.2,  # ✅ 降低默认值
-        feature_importance_method='variance',
+        feature_dropout_prob=0.3,  # 降低默认值，从0.5调整为0.3
+        feature_importance_method="variance",
     ):
         super(DPT, self).__init__()
         self.intermediate_layer_idx = {
-            'small': [2, 5, 8, 11],
-            'base': [2, 5, 8, 11],
-            'large': [4, 11, 17, 23],
-            'giant': [9, 19, 29, 39]
+            "small": [2, 5, 8, 11],
+            "base": [2, 5, 8, 11],
+            "large": [4, 11, 17, 23],
+            "giant": [9, 19, 29, 39],
         }
         self.encoder_size = encoder_size
         self.backbone = DINOv2(model_name=encoder_size)
         self.head = DPTHead(nclass, self.backbone.embed_dim, features, use_bn, out_channels=out_channels)
+        # 修复：移除硬编码的binomial分布，改为在forward中动态创建
+        self._dropout_prob = 0.5
+        # MoEx相关参数
         self.use_moex = use_moex
         self.moex_norm_type = moex_norm_type
         self.moex_swap_prob = moex_swap_prob
+        # 特征感知dropout相关参数
         self.use_feature_aware_dropout = use_feature_aware_dropout
-        self.feature_dropout_prob = feature_dropout_prob
+        self.feature_dropout_prob = feature_dropout_prob  # 降低默认值
         self.feature_importance_method = feature_importance_method
+        # 用于存储交换索引
         self._moex_swap_index = None
+        # 用于特征重要性移动平均
+        self.feature_importance_moving_avg = None
 
     def lock_backbone(self):
         for p in self.backbone.parameters():
             p.requires_grad = False
 
     def set_moex_swap_index(self, swap_index):
+        """设置MoEx交换索引"""
         self._moex_swap_index = swap_index
 
-    def feature_aware_dropout(self, features, dropout_prob=0.2):
-        """
-        ✅ 改进思路：
-        - 重要性越高 → 越不容易被丢弃
-        - 使用局部归一化（per-sample）
-        - 默认 dropout_prob=0.2（更温和）
-        """
+    def feature_aware_dropout(self, features, dropout_prob=0.3):
+        """基于特征重要性进行有选择的dropout"""
         if not self.training or not self.use_feature_aware_dropout:
             return None
-        device = features.device
-        B, C, H, W = features.shape
 
-        if self.feature_importance_method == 'variance':
-            feature_importance = features.var(dim=1, keepdim=True)  # (B,1,H,W)
-        elif self.feature_importance_method == 'mean_abs':
+        # 获取设备信息
+        device = features.device
+
+        # 计算特征重要性
+        if self.feature_importance_method == "variance":
+            feature_importance = features.var(dim=1, keepdim=True)
+        elif self.feature_importance_method == "mean_abs":
             feature_importance = torch.abs(features).mean(dim=1, keepdim=True)
-        elif self.feature_importance_method == 'max_abs':
+        elif self.feature_importance_method == "max_abs":
             feature_importance = torch.abs(features).max(dim=1, keepdim=True)[0]
         else:
             feature_importance = features.var(dim=1, keepdim=True)
 
-        # 局部归一化（避免全局极值影响）
-        importance_flat = feature_importance.view(B, -1)
-        min_val = importance_flat.min(dim=1, keepdim=True)[0].unsqueeze(-1).unsqueeze(-1)
-        max_val = importance_flat.max(dim=1, keepdim=True)[0].unsqueeze(-1).unsqueeze(-1)
-        eps = 1e-8
-        importance_norm = (feature_importance - min_val) / (max_val - min_val + eps)
+        # 重要性移动平均
+        if self.feature_importance_moving_avg is None:
+            self.feature_importance_moving_avg = feature_importance
+        else:
+            self.feature_importance_moving_avg = 0.9 * self.feature_importance_moving_avg + 0.1 * feature_importance
 
-        # 重要性越高，dropout 概率越低
+        # 归一化重要性
+        importance_min = self.feature_importance_moving_avg.min(dim=2, keepdim=True)[0].min(dim=3, keepdim=True)[0]
+        importance_max = self.feature_importance_moving_avg.max(dim=2, keepdim=True)[0].max(dim=3, keepdim=True)[0]
+        importance_range = importance_max - importance_min + 1e-8
+        importance_norm = (self.feature_importance_moving_avg - importance_min) / importance_range
+
+        # 基于重要性的dropout概率调整
         adjusted_prob = dropout_prob * (1 - importance_norm)
-        dropout_mask = torch.bernoulli(1 - adjusted_prob).to(device)
+
+        # 生成重要性感知的掩码
+        dropout_mask = torch.bernoulli(1 - adjusted_prob, generator=None).to(device)
         return dropout_mask
 
     def apply_feature_aware_dropout(self, features, dropout_mask):
+        """应用特征感知dropout"""
         if dropout_mask is not None:
-            if features.dim() == 4:
-                return features * dropout_mask
-            elif features.dim() == 3:
+            if dropout_mask.dim() == 4 and features.dim() == 4:
+                features = features * dropout_mask
+            elif dropout_mask.dim() == 4 and features.dim() == 3:
                 B, N, D = features.shape
                 H = W = int(N ** 0.5)
                 features_2d = features.transpose(1, 2).reshape(B, D, H, W)
                 features_2d = features_2d * dropout_mask
-                return features_2d.reshape(B, D, H * W).transpose(1, 2)
-        return features
+                features = features_2d.reshape(B, D, H * W).transpose(1, 2)
+            return features
 
     def forward(self, x, comp_drop=False):
+        """ Args: x: 输入图像 comp_drop: 是否使用补偿dropout """
         patch_h, patch_w = x.shape[-2] // 14, x.shape[-1] // 14
-        features = self.backbone.get_intermediate_layers(x, self.intermediate_layer_idx[self.encoder_size])
+        features = self.backbone.get_intermediate_layers(
+            x, self.intermediate_layer_idx[self.encoder_size]
+        )
 
+        # 应用MoEx交换（如果启用）
         if self.use_moex and self.training:
             batch_size = x.size(0)
             if self._moex_swap_index is not None:
@@ -172,13 +213,18 @@ class DPT(nn.Module):
                 moex_features.append(feature_moex)
             features = moex_features
 
+        # 应用特征感知dropout
         if self.training and self.use_feature_aware_dropout:
             processed_features = []
             for i, feature in enumerate(features):
                 B, N, D = feature.shape
                 H = W = int(N ** 0.5)
-                feature_2d = feature.transpose(1, 2).reshape(B, D, H, W).to(x.device)
-                dropout_mask = self.feature_aware_dropout(feature_2d, dropout_prob=self.feature_dropout_prob)
+                feature_2d = feature.transpose(1, 2).reshape(B, D, H, W)
+                # 确保设备一致
+                feature_2d = feature_2d.to(x.device)
+                dropout_mask = self.feature_aware_dropout(
+                    feature_2d, dropout_prob=self.feature_dropout_prob
+                )
                 if dropout_mask is not None:
                     feature_2d = self.apply_feature_aware_dropout(feature_2d, dropout_mask)
                 feature_processed = feature_2d.reshape(B, D, H * W).transpose(1, 2)
@@ -187,7 +233,9 @@ class DPT(nn.Module):
 
         if comp_drop:
             bs, dim = features[0].shape[0], features[0].shape[-1]
+            # 修复：动态获取设备，避免硬编码
             device = x.device
+            # 修复补偿dropout的设备问题
             binomial = torch.distributions.binomial.Binomial(probs=0.5)
             dropout_mask1 = binomial.sample((bs // 2, dim)).to(device) * 2.0
             dropout_mask2 = 2.0 - dropout_mask1
@@ -198,10 +246,7 @@ class DPT(nn.Module):
             dropout_mask2[kept_indexes, :] = 1.0
             dropout_mask = torch.cat((dropout_mask1, dropout_mask2))
             features = [feature * dropout_mask.unsqueeze(1) for feature in features]
-            out = self.head(features, patch_h, patch_w)
-            out = F.interpolate(out, (patch_h * 14, patch_w * 14), mode='bilinear', align_corners=True)
-            return out
 
         out = self.head(features, patch_h, patch_w)
-        out = F.interpolate(out, (patch_h * 14, patch_w * 14), mode='bilinear', align_corners=True)
+        out = F.interpolate(out, (patch_h * 14, patch_w * 14), mode="bilinear", align_corners=True)
         return out

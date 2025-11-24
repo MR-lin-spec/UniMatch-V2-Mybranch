@@ -7,8 +7,8 @@ import yaml
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from dataset.semi import SemiDataset
-from model.semseg.dpt import DPT
+from dataset.semi_modifyold import SemiDataset
+from model.semseg.dpt_modifyold import DPT
 
 cfg = yaml.load(open('configs/pascal.yaml','r'), Loader=yaml.Loader)
 
