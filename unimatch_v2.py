@@ -65,7 +65,8 @@ def main():
     
     # ✅ JSD: 从配置读取 JSD 权重，默认为 0（即关闭）
     jsd_weight = cfg.get('jsd_weight', 0.0)
-
+    use_feature_aware_dropout_cfg = cfg.get('use_feature_aware_dropout', True)  #控制是否使用特征dropout
+    use_augmix_cfg = cfg.get('use_augmix', True)  
     logger = init_log('global', logging.INFO)
     logger.propagate = 0
     rank, world_size = setup_distributed(port=args.port)
@@ -83,7 +84,7 @@ def main():
         'large': {'encoder_size': 'large', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
         'giant': {'encoder_size': 'giant', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
     }
-    model = DPT(**{**model_configs[cfg['backbone'].split('_')[-1]], 'nclass': cfg['nclass']})
+    model = DPT(**{**model_configs[cfg['backbone'].split('_')[-1]], 'nclass': cfg['nclass'],'use_feature_aware_dropout':use_feature_aware_dropout_cfg})
     state_dict = torch.load(f'./pretrained/{cfg["backbone"]}.pth')
     model.backbone.load_state_dict(state_dict)
     if cfg['lock_backbone']:
@@ -124,12 +125,12 @@ def main():
     criterion_u = nn.CrossEntropyLoss(reduction='none').cuda(local_rank)
 
     trainset_u = SemiDataset(
-        cfg['dataset'], cfg['data_root'], 'train_u', cfg['crop_size'], args.unlabeled_id_path
+        cfg['dataset'], cfg['data_root'], 'train_u', cfg['crop_size'], args.unlabeled_id_path, use_augmix=use_augmix_cfg
     )
     trainset_l = SemiDataset(
-        cfg['dataset'], cfg['data_root'], 'train_l', cfg['crop_size'], args.labeled_id_path, nsample=len(trainset_u.ids)
+        cfg['dataset'], cfg['data_root'], 'train_l', cfg['crop_size'], args.labeled_id_path, nsample=len(trainset_u.ids),use_augmix=use_augmix_cfg
     )
-    valset = SemiDataset(cfg['dataset'], cfg['data_root'], 'val')
+    valset = SemiDataset(cfg['dataset'], cfg['data_root'], 'val') #测试集不进行变化
 
     trainsampler_l = torch.utils.data.distributed.DistributedSampler(trainset_l)
     trainloader_l = DataLoader(trainset_l, batch_size=cfg['batch_size'], pin_memory=True, num_workers=10, drop_last=True, sampler=trainsampler_l)
@@ -182,11 +183,13 @@ def main():
                 conf_u_w = pred_u_w.softmax(dim=1).max(dim=1)[0]
                 mask_u_w = pred_u_w.argmax(dim=1)
 
-            img_u_s1[cutmix_box1.unsqueeze(1).expand(img_u_s1.shape) == 1] = img_u_s1.flip(0)[cutmix_box1.unsqueeze(1).expand(img_u_s1.shape) == 1]
-            img_u_s2[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1] = img_u_s2.flip(0)[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1]
+            #如果不使用CutMix，可以注释掉下面两句代码
+            if cfg['use_cutmix']:
+                img_u_s1[cutmix_box1.unsqueeze(1).expand(img_u_s1.shape) == 1] = img_u_s1.flip(0)[cutmix_box1.unsqueeze(1).expand(img_u_s1.shape) == 1]
+                img_u_s2[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1] = img_u_s2.flip(0)[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1]
 
             pred_x = model(img_x)
-            pred_u_s1, pred_u_s2 = model(torch.cat((img_u_s1, img_u_s2)), comp_drop=True).chunk(2)
+            pred_u_s1, pred_u_s2 = model(torch.cat((img_u_s1, img_u_s2)), comp_drop=cfg['comp_drop']).chunk(2)
 
             mask_u_w_cutmixed1, conf_u_w_cutmixed1, ignore_mask_cutmixed1 = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()
             mask_u_w_cutmixed2, conf_u_w_cutmixed2, ignore_mask_cutmixed2 = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()

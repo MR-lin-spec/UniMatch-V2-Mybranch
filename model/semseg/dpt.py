@@ -79,7 +79,7 @@ class DPT(nn.Module):
         use_moex=False,
         moex_norm_type='in',
         moex_swap_prob=0.5,
-        use_feature_aware_dropout=True,
+        use_feature_aware_dropout=False, #控制是否进行feature_aware_dropout
         feature_dropout_prob=0.2,  # ✅ 降低默认值
         feature_importance_method='variance',
     ):

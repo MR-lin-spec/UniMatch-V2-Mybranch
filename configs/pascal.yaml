@@ -1,8 +1,13 @@
+#消融使用目录清单
+
+
 # arguments for dataset
 dataset: pascal
 data_root: /root/autodl-tmp/VOC2012
 nclass: 21
 crop_size: 476
+use_augmix: False # 控制是否进行augmix
+use_cutmix: True # 控制是否进行CutMix
 
 # arguments for training
 epochs: 60
@@ -14,10 +19,14 @@ criterion:
   kwargs:
     ignore_index: 255
 conf_thresh: 0.95
-jsd_weight: 0.1  # 建议从 0.1 开始尝试，如 0.05, 0.1, 0.2
+jsd_weight: 0.1 # 建议从 0.1 开始尝试，如 0.05, 0.1, 0.2
 conf_thresh: 0.95   # 初始可设高一点，避免噪声伪标签
+
+
 
 # arguments for model
 model: dpt
 backbone: dinov2_small
 lock_backbone: False
+use_feature_aware_dropout: True  # 控制是否进行feature_aware_dropout
+comp_drop: True  # 控制是否进行原始dropout

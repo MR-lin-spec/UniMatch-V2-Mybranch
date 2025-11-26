@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 class SemiDataset(Dataset):
-    def __init__(self, name, root, mode, size=None, id_path=None, nsample=None, use_augmix=False):
+    def __init__(self, name, root, mode, size=None, id_path=None, nsample=None, use_augmix=True):
         self.name = name
         self.root = root
         self.mode = mode
