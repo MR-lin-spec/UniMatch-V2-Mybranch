@@ -5,7 +5,7 @@
 # method: ['unimatch_v2', 'fixmatch', 'supervised']
 # exp: just for specifying the 'save_path'
 # split: ['92', '1_16', ...]. Please check directory './splits/$dataset' for concrete splits
-dataset='pascal'
+dataset='cityspaces'
 method='unimatch_v2'
 exp='dinov2_small'
 split='92'

@@ -19,7 +19,7 @@ criterion:
   kwargs:
     ignore_index: 255
 conf_thresh: 0.95
-jsd_weight: 0.1 # 建议从 0.1 开始尝试，如 0.05, 0.1, 0.2
+jsd_weight: 0 # 建议从 0.1 开始尝试，如 0.05, 0.1, 0.2
 conf_thresh: 0.95   # 初始可设高一点，避免噪声伪标签
 
 
