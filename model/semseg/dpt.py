@@ -115,6 +115,8 @@ class DPT(nn.Module):
         - 使用局部归一化（per-sample）
         - 默认 dropout_prob=0.2（更温和）
         """
+        dropout_prob=self.feature_dropout_prob
+
         if not self.training or not self.use_feature_aware_dropout:
             return None
         device = features.device
