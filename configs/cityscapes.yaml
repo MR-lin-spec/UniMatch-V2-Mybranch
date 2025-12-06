@@ -17,10 +17,10 @@ criterion:
     ignore_index: 255
     thresh: 0.7
     min_kept: 200000
-conf_thresh: 0.90
+conf_thresh: 0.95
 jsd_weight: 0 # 建议从 0.1 开始尝试，如 0.05, 0.1, 0.2
-mse_weight: 1.0 # ← 启用 MSE
-kl_weight: 0
+mse_weight: 0 # ← 启用 MSE
+kl_weight: 0.9
 
 
 # arguments for model
