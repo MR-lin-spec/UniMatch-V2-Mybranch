@@ -10,6 +10,7 @@ method='unimatch_v2'
 exp='/root/autodl-tmp/'
 split='1_16'
 
+
 config=configs/${dataset}.yaml
 labeled_id_path=splits/$dataset/$split/labeled.txt
 unlabeled_id_path=splits/$dataset/$split/unlabeled.txt
