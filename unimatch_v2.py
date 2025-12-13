@@ -19,6 +19,8 @@ from util.utils import count_params, init_log, AverageMeter
 from util.dist_helper import setup_distributed
 import random
 import numpy as np
+import torch.nn.functional as F  # ✅ 提前导入 F
+
 
 def set_seed(seed=42):
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -30,7 +32,10 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+
 set_seed(42)
+
+
 # ✅ 安全的 JSD 实现（基于 log-probs）
 def jensen_shannon_divergence(log_p, log_q):
     """
@@ -41,15 +46,31 @@ def jensen_shannon_divergence(log_p, log_q):
     p = torch.exp(log_p)
     q = torch.exp(log_q)
     m = 0.5 * (p + q)
-    # Avoid log(0) by clamping m to a small epsilon
     m = torch.clamp(m, min=1e-8)
     log_m = torch.log(m)
-
-    kl_pm = F.kl_div(log_m, log_p, reduction='none', log_target=True)  # since log_p is log-prob
+    kl_pm = F.kl_div(log_m, log_p, reduction='none', log_target=True)
     kl_qm = F.kl_div(log_m, log_q, reduction='none', log_target=True)
-
     jsd = 0.5 * (kl_pm + kl_qm)
-    return jsd.mean()  # average over all dimensions
+    return jsd.mean()
+
+
+# ✅ MSE loss between softmax outputs
+def mse_loss(pred1, pred2):
+    p1 = F.softmax(pred1, dim=1)
+    p2 = F.softmax(pred2, dim=1)
+    return F.mse_loss(p1, p2, reduction='mean')
+
+
+# ✅ Symmetric KL divergence (more stable than one-way)
+def kl_divergence(pred1, pred2):
+    log_p1 = F.log_softmax(pred1, dim=1)
+    log_p2 = F.log_softmax(pred2, dim=1)
+    p2 = torch.exp(log_p2)
+    p1 = torch.exp(log_p1)
+    kl1 = F.kl_div(log_p1, p2, reduction='mean')
+    kl2 = F.kl_div(log_p2, p1, reduction='mean')
+    return (kl1 + kl2) * 0.5
+
 
 parser = argparse.ArgumentParser(description='UniMatch V2: Pushing the Limit of Semi-Supervised Semantic Segmentation')
 parser.add_argument('--config', type=str, required=True)
@@ -59,14 +80,11 @@ parser.add_argument('--save-path', type=str, required=True)
 parser.add_argument('--local_rank', '--local-rank', default=0, type=int)
 parser.add_argument('--port', default=None, type=int)
 
+
 def main():
     args = parser.parse_args()
     cfg = yaml.load(open(args.config, "r"), Loader=yaml.Loader)
-    
-    # ✅ JSD: 从配置读取 JSD 权重，默认为 0（即关闭）
-    jsd_weight = cfg.get('jsd_weight', 0.0)
-    use_feature_aware_dropout_cfg = cfg.get('use_feature_aware_dropout', True)  #控制是否使用特征dropout
-    use_augmix_cfg = cfg.get('use_augmix', True)  
+
     logger = init_log('global', logging.INFO)
     logger.propagate = 0
     rank, world_size = setup_distributed(port=args.port)
@@ -84,9 +102,16 @@ def main():
         'large': {'encoder_size': 'large', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
         'giant': {'encoder_size': 'giant', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
     }
-    model = DPT(**{**model_configs[cfg['backbone'].split('_')[-1]], 'nclass': cfg['nclass'],'use_feature_aware_dropout':use_feature_aware_dropout_cfg})
+
+    use_feature_aware_dropout_cfg = cfg.get('use_feature_aware_dropout', True)
+    use_augmix_cfg = cfg.get('use_augmix', True)
+    use_augment_cfg = cfg.get('use_augment', True)
+    cutmix_ratio_cfg = cfg.get('cutmix_ratio', 0.5)
+    model = DPT(**{**model_configs[cfg['backbone'].split('_')[-1]], 'nclass': cfg['nclass'],
+                   'use_feature_aware_dropout': use_feature_aware_dropout_cfg})
     state_dict = torch.load(f'./pretrained/{cfg["backbone"]}.pth')
     model.backbone.load_state_dict(state_dict)
+
     if cfg['lock_backbone']:
         model.lock_backbone()
 
@@ -125,12 +150,14 @@ def main():
     criterion_u = nn.CrossEntropyLoss(reduction='none').cuda(local_rank)
 
     trainset_u = SemiDataset(
-        cfg['dataset'], cfg['data_root'], 'train_u', cfg['crop_size'], args.unlabeled_id_path, use_augmix=use_augmix_cfg
+        cfg['dataset'], cfg['data_root'], 'train_u', cfg['crop_size'], args.unlabeled_id_path, use_augmix=use_augmix_cfg,use_augment=use_augment_cfg
+        ,cutmix_ratio=cutmix_ratio_cfg
     )
     trainset_l = SemiDataset(
-        cfg['dataset'], cfg['data_root'], 'train_l', cfg['crop_size'], args.labeled_id_path, nsample=len(trainset_u.ids),use_augmix=use_augmix_cfg
+        cfg['dataset'], cfg['data_root'], 'train_l', cfg['crop_size'], args.labeled_id_path, nsample=len(trainset_u.ids), use_augmix=use_augmix_cfg,
+        use_augment=use_augment_cfg,cutmix_ratio=cutmix_ratio_cfg
     )
-    valset = SemiDataset(cfg['dataset'], cfg['data_root'], 'val') #测试集不进行变化
+    valset = SemiDataset(cfg['dataset'], cfg['data_root'], 'val')
 
     trainsampler_l = torch.utils.data.distributed.DistributedSampler(trainset_l)
     trainloader_l = DataLoader(trainset_l, batch_size=cfg['batch_size'], pin_memory=True, num_workers=10, drop_last=True, sampler=trainsampler_l)
@@ -165,12 +192,13 @@ def main():
         total_loss = AverageMeter()
         total_loss_x = AverageMeter()
         total_loss_s = AverageMeter()
-        total_loss_jsd = AverageMeter()  # ✅ JSD
+        total_loss_consistency = AverageMeter()  # ✅ 统一 consistency loss meter
         total_mask_ratio = AverageMeter()
 
         trainloader_l.sampler.set_epoch(epoch)
         trainloader_u.sampler.set_epoch(epoch)
         loader = zip(trainloader_l, trainloader_u)
+
         model.train()
 
         for i, ((img_x, mask_x), (img_u_w, img_u_s1, img_u_s2, ignore_mask, cutmix_box1, cutmix_box2)) in enumerate(loader):
@@ -183,7 +211,6 @@ def main():
                 conf_u_w = pred_u_w.softmax(dim=1).max(dim=1)[0]
                 mask_u_w = pred_u_w.argmax(dim=1)
 
-            #如果不使用CutMix，可以注释掉下面两句代码
             if cfg['use_cutmix']:
                 img_u_s1[cutmix_box1.unsqueeze(1).expand(img_u_s1.shape) == 1] = img_u_s1.flip(0)[cutmix_box1.unsqueeze(1).expand(img_u_s1.shape) == 1]
                 img_u_s2[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1] = img_u_s2.flip(0)[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1]
@@ -214,29 +241,42 @@ def main():
 
             loss_u_s = (loss_u_s1 + loss_u_s2) / 2.0
 
-            # ✅ 安全计算 JSD：仅当有有效区域 or epoch > warmup 时启用
-            loss_jsd = torch.tensor(0.0, device=img_x.device)
+            # ✅ 读取一致性损失权重
             jsd_weight = cfg.get('jsd_weight', 0.0)
-            if jsd_weight > 0:
-                # Option 1: Only compute JSD if there's reliable pseudo-label signal
-                mask_ratio = ((conf_u_w >= cfg['conf_thresh']) & (ignore_mask != 255)).float().mean()
-                if mask_ratio > 0.01:  # 至少 1% 像素可信
+            mse_weight = cfg.get('mse_weight', 0.0)
+            kl_weight = cfg.get('kl_weight', 0.0)
+
+            # ✅ 互斥检查
+            active_weights = [w for w in [jsd_weight, mse_weight, kl_weight] if w > 0]
+            if len(active_weights) > 1:
+                raise ValueError(f"Only one of jsd_weight, mse_weight, kl_weight can be > 0. "
+                                 f"Got JSD={jsd_weight}, MSE={mse_weight}, KL={kl_weight}")
+
+            loss_consistency = torch.tensor(0.0, device=img_x.device)
+            consistency_type = 'none'
+
+            # ✅ 只在有足够可信区域时计算一致性损失
+            mask_valid = (conf_u_w >= cfg['conf_thresh']) & (ignore_mask != 255)
+            mask_ratio_val = mask_valid.float().mean()
+            if mask_ratio_val > 0.01:
+                if jsd_weight > 0:
                     log_p1 = F.log_softmax(pred_u_s1, dim=1)
                     log_p2 = F.log_softmax(pred_u_s2, dim=1)
-                    loss_jsd = jensen_shannon_divergence(log_p1, log_p2)
-                # Option 2 (alternative): Warmup JSD after N epochs
-                # if epoch >= 5:  # e.g., start JSD after 5 epochs
-                #     log_p1 = F.log_softmax(pred_u_s1, dim=1)
-                #     log_p2 = F.log_softmax(pred_u_s2, dim=1)
-                #     loss_jsd = jensen_shannon_divergence(log_p1, log_p2)
+                    loss_consistency = jensen_shannon_divergence(log_p1, log_p2)
+                    consistency_type = 'jsd'
+                elif mse_weight > 0:
+                    loss_consistency = mse_loss(pred_u_s1, pred_u_s2)
+                    consistency_type = 'mse'
+                elif kl_weight > 0:
+                    loss_consistency = kl_divergence(pred_u_s1, pred_u_s2)
+                    consistency_type = 'kl'
 
-            # Total loss
-            if jsd_weight > 0 and loss_jsd > 0:
-                loss = (loss_x + loss_u_s + jsd_weight * loss_jsd) / (2.0 + jsd_weight)
+            # ✅ Total loss with normalization
+            if jsd_weight > 0 or mse_weight > 0 or kl_weight > 0:
+                weight = max(jsd_weight, mse_weight, kl_weight)  # only one > 0
+                loss = (loss_x + loss_u_s + weight * loss_consistency) / (2.0 + weight)
             else:
                 loss = (loss_x + loss_u_s) / 2.0
-
-    
 
             optimizer.zero_grad()
             loss.backward()
@@ -245,9 +285,10 @@ def main():
             total_loss.update(loss.item())
             total_loss_x.update(loss_x.item())
             total_loss_s.update(loss_u_s.item())
-            total_loss_jsd.update(loss_jsd.item())  # ✅ JSD
+            total_loss_consistency.update(loss_consistency.item())
+
             mask_ratio = ((conf_u_w >= cfg['conf_thresh']) & (ignore_mask != 255)).sum().item() / (ignore_mask != 255).sum()
-            total_mask_ratio.update(mask_ratio.item())
+            total_mask_ratio.update(mask_ratio)
 
             iters = epoch * len(trainloader_u) + i
             lr = cfg['lr'] * (1 - iters / total_iters) ** 0.9
@@ -264,14 +305,14 @@ def main():
                 writer.add_scalar('train/loss_all', loss.item(), iters)
                 writer.add_scalar('train/loss_x', loss_x.item(), iters)
                 writer.add_scalar('train/loss_s', loss_u_s.item(), iters)
-                writer.add_scalar('train/loss_jsd', loss_jsd.item(), iters)  # ✅ JSD
+                writer.add_scalar('train/loss_consistency', loss_consistency.item(), iters)  # ✅ 统一 key
                 writer.add_scalar('train/mask_ratio', mask_ratio, iters)
 
                 if (i % (len(trainloader_u) // 8) == 0):
                     logger.info('Iters: {:}, LR: {:.7f}, Total loss: {:.3f}, Loss x: {:.3f}, Loss s: {:.3f}, '
-                                'Loss JSD: {:.3f}, Mask ratio: {:.3f}'.format(
+                                'Loss {} ({:.3f}), Mask ratio: {:.3f}'.format(
                         i, optimizer.param_groups[0]['lr'], total_loss.avg, total_loss_x.avg,
-                        total_loss_s.avg, total_loss_jsd.avg, total_mask_ratio.avg))
+                        total_loss_s.avg, consistency_type, total_loss_consistency.avg, total_mask_ratio.avg))
 
         eval_mode = 'sliding_window' if cfg['dataset'] == 'cityscapes' else 'original'
         mIoU, iou_class = evaluate(model, valloader, eval_mode, cfg, multiplier=14)
@@ -311,6 +352,6 @@ def main():
             if is_best:
                 torch.save(checkpoint, os.path.join(args.save_path, 'best.pth'))
 
+
 if __name__ == '__main__':
-    import torch.nn.functional as F  # ✅ JSD: 确保 F 可用
     main()

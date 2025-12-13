@@ -3,15 +3,17 @@
 
 # arguments for dataset
 dataset: pascal
-data_root: /root/autodl-tmp/VOC2012
+data_root: /DeepLearning_linux/Dataset/VOC2012
 nclass: 21
 crop_size: 476
-use_augmix: False # 控制是否进行augmix
+use_augmix: True # 控制是否进行augmix
 use_cutmix: True # 控制是否进行CutMix
+cutmix_ratio: 0.5 # CutMix的比例
+use_augment: False  # 控制是否进行增强
 
 # arguments for training
 epochs: 60
-batch_size: 6 # per GPU x 4 GPUs
+batch_size: 2 # per GPU x 4 GPUs
 lr:  0.000005
 lr_multi: 40.0
 criterion:
@@ -19,7 +21,9 @@ criterion:
   kwargs:
     ignore_index: 255
 conf_thresh: 0.95
-jsd_weight: 0 # 建议从 0.1 开始尝试，如 0.05, 0.1, 0.2
+jsd_weight: 0.2 # 建议从 0.1 开始尝试，如 0.05, 0.1, 0.2
+mse_weight: 0  # ← 启用 MSE
+kl_weight: 0.0  # ← 启用 KL 散度2
 conf_thresh: 0.95   # 初始可设高一点，避免噪声伪标签
 
 
