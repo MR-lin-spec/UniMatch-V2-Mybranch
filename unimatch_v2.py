@@ -103,12 +103,14 @@ def main():
         'giant': {'encoder_size': 'giant', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
     }
 
-    use_feature_aware_dropout_cfg = cfg.get('use_feature_aware_dropout', True)
+    use_dropout_cfg = cfg.get('use_dropout', True)
+    fad_prob_cfg = cfg.get('fad_prob', 0.2)
+    cd_prob_cfg = cfg.get('cd_prob', 0.3)
     use_augmix_cfg = cfg.get('use_augmix', True)
     use_augment_cfg = cfg.get('use_augment', True)
     cutmix_ratio_cfg = cfg.get('cutmix_ratio', 0.5)
     model = DPT(**{**model_configs[cfg['backbone'].split('_')[-1]], 'nclass': cfg['nclass'],
-                   'use_feature_aware_dropout': use_feature_aware_dropout_cfg})
+                   'use_dropout': use_dropout_cfg, 'fad_prob': fad_prob_cfg, 'cd_prob': cd_prob_cfg})
     state_dict = torch.load(f'./pretrained/{cfg["backbone"]}.pth')
     model.backbone.load_state_dict(state_dict)
 
@@ -172,7 +174,7 @@ def main():
     epoch = -1
 
     if os.path.exists(os.path.join(args.save_path, 'latest.pth')):
-        checkpoint = torch.load(os.path.join(args.save_path, 'latest.pth'), map_location='cpu')
+        checkpoint = torch.load(os.path.join(args.save_path, 'latest.pth'), map_location='cpu',weights_only=False)
         model.load_state_dict(checkpoint['model'])
         model_ema.load_state_dict(checkpoint['model_ema'])
         optimizer.load_state_dict(checkpoint['optimizer'])
@@ -216,7 +218,7 @@ def main():
                 img_u_s2[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1] = img_u_s2.flip(0)[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1]
 
             pred_x = model(img_x)
-            pred_u_s1, pred_u_s2 = model(torch.cat((img_u_s1, img_u_s2)), comp_drop=cfg['comp_drop']).chunk(2)
+            pred_u_s1, pred_u_s2 = model(torch.cat((img_u_s1, img_u_s2))).chunk(2)
 
             mask_u_w_cutmixed1, conf_u_w_cutmixed1, ignore_mask_cutmixed1 = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()
             mask_u_w_cutmixed2, conf_u_w_cutmixed2, ignore_mask_cutmixed2 = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()

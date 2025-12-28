@@ -11,7 +11,7 @@ from torchvision import transforms
 
 class SemiDataset(Dataset):
     def __init__(self, name, root, mode, size=None, id_path=None, nsample=None, use_augmix=True,
-    use_augment=True,cutmix_ratio=0.5):
+    use_augment=False,cutmix_ratio=0.5):
         self.name = name
         self.root = root
         self.mode = mode
@@ -50,6 +50,7 @@ class SemiDataset(Dataset):
         #使用随机augmix弱增强，或者手工自定义增强,如果都不指定，那就使用原图
         if self.use_augmix:
                 img= augmix_chain(img)
+                mask=mask
         elif self.use_augment:
                 img, mask = hflip(img, mask, p=0.5)
         else:

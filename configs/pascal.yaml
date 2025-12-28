@@ -32,5 +32,6 @@ conf_thresh: 0.95   # 初始可设高一点，避免噪声伪标签
 model: dpt
 backbone: dinov2_small
 lock_backbone: False
-use_feature_aware_dropout: True  # 控制是否进行feature_aware_dropout
-comp_drop: True  # 控制是否进行原始dropout
+use_dropout: True  # 控制是否进行feature_aware_dropout
+fad_prob: 0.2
+cd_prob: 0.3
