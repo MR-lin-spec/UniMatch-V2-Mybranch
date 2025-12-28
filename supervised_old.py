@@ -53,7 +53,7 @@ def evaluate(model, loader, mode, cfg, multiplier=None):
                 while row < h:
                     col = 0
                     while col < w:
-                        pred = model(img[:, :, row: row + grid, col: col + grid])
+                        pred = model(img[:, :, row: row + grid, col: col + grid], comp_drop=False)
                         final[:, :, row: row + grid, col: col + grid] += pred.softmax(dim=1)
                         if col == w - grid:
                             break
@@ -75,7 +75,7 @@ def evaluate(model, loader, mode, cfg, multiplier=None):
                         new_h, new_w = int(ori_h / multiplier + 0.5) * multiplier, int(ori_w / multiplier + 0.5) * multiplier
                     img = F.interpolate(img, (new_h, new_w), mode='bilinear', align_corners=True)
                 
-                pred = model(img)
+                pred = model(img, comp_drop=False)
             
                 if multiplier is not None:
                     pred = F.interpolate(pred, (ori_h, ori_w), mode='bilinear', align_corners=True)

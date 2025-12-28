@@ -10,7 +10,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import yaml
-from dataset.semi import SemiDataset
+from dataset.semi_old2 import SemiDataset
 from model.semseg.dpt import DPT
 from supervised import evaluate
 from util.classes import CLASSES
@@ -20,8 +20,8 @@ from util.dist_helper import setup_distributed
 import random
 import numpy as np
 import torch.nn.functional as F  # ✅ 提前导入 F
-
-
+import os
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 def set_seed(seed=42):
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -104,15 +104,11 @@ def main():
         'giant': {'encoder_size': 'giant', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
     }
 
-    #获取参数
-    use_dropout_cfg = cfg.get('use_dropout', True)
+    use_feature_aware_dropout_cfg = cfg.get('use_feature_aware_dropout', True)
     use_augmix_cfg = cfg.get('use_augmix', True)
-    use_augment_cfg = cfg.get('use_augment', True)
-    fad_prob_cfg = cfg.get('fad_prob', 0.2)
-    cd_prob_cfg = cfg.get('cd_prob', 0.3)
-    cutmix_ratio_cfg = cfg.get('cutmix_ratio', 0.5)
+
     model = DPT(**{**model_configs[cfg['backbone'].split('_')[-1]], 'nclass': cfg['nclass'],
-                   'use_dropout': use_dropout_cfg, 'fad_prob': fad_prob_cfg, 'cd_prob': cd_prob_cfg})
+                   'use_feature_aware_dropout': use_feature_aware_dropout_cfg,"feature_dropout_prob":cfg['feature_dropout_prob']})
     state_dict = torch.load(f'./pretrained/{cfg["backbone"]}.pth')
     model.backbone.load_state_dict(state_dict)
 
@@ -154,12 +150,10 @@ def main():
     criterion_u = nn.CrossEntropyLoss(reduction='none').cuda(local_rank)
 
     trainset_u = SemiDataset(
-        cfg['dataset'], cfg['data_root'], 'train_u', cfg['crop_size'], args.unlabeled_id_path, use_augmix=use_augmix_cfg,use_augment=use_augment_cfg
-        ,cutmix_ratio=cutmix_ratio_cfg
+        cfg['dataset'], cfg['data_root'], 'train_u', cfg['crop_size'], args.unlabeled_id_path, use_augmix=use_augmix_cfg
     )
     trainset_l = SemiDataset(
-        cfg['dataset'], cfg['data_root'], 'train_l', cfg['crop_size'], args.labeled_id_path, nsample=len(trainset_u.ids), use_augmix=use_augmix_cfg,
-        use_augment=use_augment_cfg,cutmix_ratio=cutmix_ratio_cfg
+        cfg['dataset'], cfg['data_root'], 'train_l', cfg['crop_size'], args.labeled_id_path, nsample=len(trainset_u.ids), use_augmix=use_augmix_cfg
     )
     valset = SemiDataset(cfg['dataset'], cfg['data_root'], 'val')
 
@@ -220,7 +214,7 @@ def main():
                 img_u_s2[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1] = img_u_s2.flip(0)[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1]
 
             pred_x = model(img_x)
-            pred_u_s1, pred_u_s2 = model(torch.cat((img_u_s1, img_u_s2))).chunk(2)
+            pred_u_s1, pred_u_s2 = model(torch.cat((img_u_s1, img_u_s2)), comp_drop=cfg['comp_drop']).chunk(2)
 
             mask_u_w_cutmixed1, conf_u_w_cutmixed1, ignore_mask_cutmixed1 = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()
             mask_u_w_cutmixed2, conf_u_w_cutmixed2, ignore_mask_cutmixed2 = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()

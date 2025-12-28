@@ -1,4 +1,3 @@
-# dpt.py  统一
 import random
 import torch
 import torch.nn as nn
@@ -80,10 +79,8 @@ class DPT(nn.Module):
         use_moex=False,
         moex_norm_type='in',
         moex_swap_prob=0.5,
-        # ----- 统一 Dropout 配置 -----
-        use_dropout=True,         # yaml 总开关
-        fad_prob=0.2,              # Feature-Aware 强度
-        cd_prob=0.3,               # Comp-Dropout 强度（=0 则退化为纯 FAD）
+        use_feature_aware_dropout=False, #控制是否进行feature_aware_dropout
+        feature_dropout_prob=0.2,  # ✅ 降低默认值
         feature_importance_method='variance',
     ):
         super(DPT, self).__init__()
@@ -96,16 +93,13 @@ class DPT(nn.Module):
         self.encoder_size = encoder_size
         self.backbone = DINOv2(model_name=encoder_size)
         self.head = DPTHead(nclass, self.backbone.embed_dim, features, use_bn, out_channels=out_channels)
-        # MoEx
         self.use_moex = use_moex
         self.moex_norm_type = moex_norm_type
         self.moex_swap_prob = moex_swap_prob
-        self._moex_swap_index = None
-        # Unified Dropout
-        self.use_dropout = use_dropout
-        self.fad_prob = fad_prob
-        self.cd_prob = cd_prob
+        self.use_feature_aware_dropout = use_feature_aware_dropout
+        self.feature_dropout_prob = feature_dropout_prob
         self.feature_importance_method = feature_importance_method
+        self._moex_swap_index = None
 
     def lock_backbone(self):
         for p in self.backbone.parameters():
@@ -114,73 +108,57 @@ class DPT(nn.Module):
     def set_moex_swap_index(self, swap_index):
         self._moex_swap_index = swap_index
 
-    def make_unified_mask(self, feat2d):
+    def feature_aware_dropout(self, features, dropout_prob=0.2):
         """
-        返回与 feat2d 同形状的 unified mask，值域 {0,1}
-        （修正：不再使用 2.0，避免特征放大）
+        ✅ 改进思路：
+        - 重要性越高 → 越不容易被丢弃
+        - 使用局部归一化（per-sample）
+        - 默认 dropout_prob=0.2（更温和）
         """
-        if not self.use_dropout or not self.training:
+        dropout_prob=self.feature_dropout_prob
+
+        if not self.training or not self.use_feature_aware_dropout:
             return None
-        B, _, H, W = feat2d.shape
-        device = feat2d.device
-        fad_p = self.fad_prob
-        cd_p  = self.cd_prob
+        device = features.device
+        B, C, H, W = features.shape
 
-        # 1) FAD 分支
         if self.feature_importance_method == 'variance':
-            imp = feat2d.var(dim=1, keepdim=True)
+            feature_importance = features.var(dim=1, keepdim=True)  # (B,1,H,W)
         elif self.feature_importance_method == 'mean_abs':
-            imp = feat2d.abs().mean(dim=1, keepdim=True)
+            feature_importance = torch.abs(features).mean(dim=1, keepdim=True)
         elif self.feature_importance_method == 'max_abs':
-            imp = feat2d.abs().max(dim=1, keepdim=True)[0]
+            feature_importance = torch.abs(features).max(dim=1, keepdim=True)[0]
         else:
-            imp = feat2d.var(dim=1, keepdim=True)
+            feature_importance = features.var(dim=1, keepdim=True)
 
-        # 归一化到 [0,1]
-        imp = (imp - imp.amin(dim=(2,3), keepdim=True)) / \
-              (imp.amax(dim=(2,3), keepdim=True) - imp.amin(dim=(2,3), keepdim=True) + 1e-8)
-        fad_mask = torch.bernoulli(1 - fad_p * (1 - imp)).to(device)  # [B, 1, H, W], 0/1
+        # 局部归一化（避免全局极值影响）
+        importance_flat = feature_importance.view(B, -1)
+        min_val = importance_flat.min(dim=1, keepdim=True)[0].unsqueeze(-1).unsqueeze(-1)
+        max_val = importance_flat.max(dim=1, keepdim=True)[0].unsqueeze(-1).unsqueeze(-1)
+        eps = 1e-8
+        importance_norm = (feature_importance - min_val) / (max_val - min_val + eps)
 
-        # 2) CD 分支 —— 修正：仅输出 0 或 1
-        if cd_p <= 0:
-            cd_mask = torch.ones(B, 1, 1, 1, device=device)  # 全保留
-        else:
-            half = B // 2
-            # 确保 batch 是偶数（若奇数，忽略最后一个样本）
-            if B % 2 != 0:
-                # 临时处理：复制最后一个样本或截断，这里选择截断
-                B_eff = B - 1
-                half = B_eff // 2
-                # 注意：实际应用中可 pad 或 warn，此处简化
-                feat2d = feat2d[:B_eff]
-                B = B_eff
-                fad_mask = fad_mask[:B]
+        # 重要性越高，dropout 概率越低
+        adjusted_prob = dropout_prob * (1 - importance_norm)
+        dropout_mask = torch.bernoulli(1 - adjusted_prob).to(device)
+        return dropout_mask
 
-            # 决定每对是否启用互补丢弃
-            drop_pair = torch.rand(half, device=device) < cd_p  # [half], True 表示要丢弃其中一个
-            m1 = torch.ones(half, 1, device=device)
-            m2 = torch.ones(half, 1, device=device)
+    def apply_feature_aware_dropout(self, features, dropout_mask):
+        if dropout_mask is not None:
+            if features.dim() == 4:
+                return features * dropout_mask
+            elif features.dim() == 3:
+                B, N, D = features.shape
+                H = W = int(N ** 0.5)
+                features_2d = features.transpose(1, 2).reshape(B, D, H, W)
+                features_2d = features_2d * dropout_mask
+                return features_2d.reshape(B, D, H * W).transpose(1, 2)
+        return features
 
-            # 对需要丢弃的对，随机选择一个丢弃
-            for i in range(half):
-                if drop_pair[i]:
-                    if torch.rand(1).item() < 0.5:
-                        m1[i] = 0.0
-                    else:
-                        m2[i] = 0.0
-
-            cd_mask_half = torch.cat([m1, m2], dim=0)  # [B, 1]
-            cd_mask = cd_mask_half.view(B, 1, 1, 1)   # [B, 1, 1, 1]
-
-        # 3) 融合：逐元素相乘，结果仍为 0/1
-        unified = fad_mask * cd_mask.expand_as(fad_mask)
-        return unified
-
-    def forward(self, x):
+    def forward(self, x, comp_drop=False):
         patch_h, patch_w = x.shape[-2] // 14, x.shape[-1] // 14
         features = self.backbone.get_intermediate_layers(x, self.intermediate_layer_idx[self.encoder_size])
 
-        # MoEx
         if self.use_moex and self.training:
             batch_size = x.size(0)
             if self._moex_swap_index is not None:
@@ -190,41 +168,41 @@ class DPT(nn.Module):
                 moex_swap_index = MoEx.create_swap_index(batch_size, self.moex_swap_prob)
             moex_features = []
             for feature in features:
-                feature_moex, _, _ = MoEx.apply(
+                feature_moex, mean, std = MoEx.apply(
                     feature, moex_swap_index, norm_type=self.moex_norm_type, epsilon=1e-5, positive_only=False
                 )
                 moex_features.append(feature_moex)
             features = moex_features
 
-        # Unified Dropout
-        if self.use_dropout and self.training:
-            processed = []
-            for f in features:
-                B_orig, N, D = f.shape
-                H = W = int(N**0.5)
-                f2d = f.transpose(1, 2).view(B_orig, D, H, W)
-                mask = self.make_unified_mask(f2d)
-                if mask is not None:
-                    # 如果 batch 被调整（如奇数），需同步裁剪 f2d
-                    if mask.shape[0] != f2d.shape[0]:
-                        f2d = f2d[:mask.shape[0]]
-                    f2d = f2d * mask
-                    # 恢复原始 batch size（如果被裁剪）
-                    if f2d.shape[0] != B_orig:
-                        # 简单补回最后一个（或 pad zero），此处为简化，假设 batch 为偶数
-                        pass
-                else:
-                    f2d = f2d
-                B_new = f2d.shape[0]
-                f_processed = f2d.view(B_new, D, N).transpose(1, 2)
-                # 若 batch 被裁剪，需对齐（实际建议输入偶数 batch）
-                if B_new != B_orig:
-                    # 扩展回原 batch（用最后一项填充）
-                    diff = B_orig - B_new
-                    last = f_processed[-1:].expand(diff, -1, -1)
-                    f_processed = torch.cat([f_processed, last], dim=0)
-                processed.append(f_processed)
-            features = processed
+        if self.training and self.use_feature_aware_dropout:
+            processed_features = []
+            for i, feature in enumerate(features):
+                B, N, D = feature.shape
+                H = W = int(N ** 0.5)
+                feature_2d = feature.transpose(1, 2).reshape(B, D, H, W).to(x.device)
+                dropout_mask = self.feature_aware_dropout(feature_2d, dropout_prob=self.feature_dropout_prob)
+                if dropout_mask is not None:
+                    feature_2d = self.apply_feature_aware_dropout(feature_2d, dropout_mask)
+                feature_processed = feature_2d.reshape(B, D, H * W).transpose(1, 2)
+                processed_features.append(feature_processed)
+            features = processed_features
+
+        if comp_drop:
+            bs, dim = features[0].shape[0], features[0].shape[-1]
+            device = x.device
+            binomial = torch.distributions.binomial.Binomial(probs=0.5)
+            dropout_mask1 = binomial.sample((bs // 2, dim)).to(device) * 2.0
+            dropout_mask2 = 2.0 - dropout_mask1
+            dropout_prob = 0.5
+            num_kept = int(bs // 2 * (1 - dropout_prob))
+            kept_indexes = torch.randperm(bs // 2, device=device)[:num_kept]
+            dropout_mask1[kept_indexes, :] = 1.0
+            dropout_mask2[kept_indexes, :] = 1.0
+            dropout_mask = torch.cat((dropout_mask1, dropout_mask2))
+            features = [feature * dropout_mask.unsqueeze(1) for feature in features]
+            out = self.head(features, patch_h, patch_w)
+            out = F.interpolate(out, (patch_h * 14, patch_w * 14), mode='bilinear', align_corners=True)
+            return out
 
         out = self.head(features, patch_h, patch_w)
         out = F.interpolate(out, (patch_h * 14, patch_w * 14), mode='bilinear', align_corners=True)

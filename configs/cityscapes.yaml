@@ -1,24 +1,26 @@
 # arguments for dataset
 dataset: cityscapes
-data_root: roots/DeepLearning_Linux_MD/Dataset_MD/cityscapes/cityscapes
+data_root: /home/roots/DeepLearning_Linux_MD/Dataset_MD/cityscapes
 nclass: 19
-crop_size: 728
-use_augmix: False # 控制是否进行augmix
+crop_size: 700
+use_augmix:  False # 控制是否进行augmix
 use_cutmix: True # 控制是否进行CutMix
+cutmix_ratio: 0.7 # CutMix的比例
+use_augment: False  # 控制是否进行增强
 
 # arguments for training
 epochs: 180
-batch_size: 8 # per GPU x 4 GPUs
+batch_size: 2 # per GPU x 4 GPUs
 lr: 0.000005
 lr_multi: 40.0
 criterion:
   name: OHEM
   kwargs:
     ignore_index: 255
-    thresh: 0.7
+    thresh: 0.95
     min_kept: 200000
 conf_thresh: 0.95
-jsd_weight: 0.2 # 建议从 0.1 开始尝试，如 0.05, 0.1, 0.2
+jsd_weight: 0.1 # 建议从 0.1 开始尝试，如 0.05, 0.1, 0.2
 mse_weight: 0 # ← 启用 MSE
 kl_weight: 0
 
@@ -27,6 +29,6 @@ kl_weight: 0
 model: dpt
 backbone: dinov2_small
 lock_backbone: False
-use_feature_aware_dropout: True  # 控制是否进行feature_aware_dropout
-feature_dropout_prob: 0.2
-comp_drop: True  # 控制是否进行原始dropout
+use_dropout: True # 控制是否进行dropout，12-15
+fad_prob: 0.2
+cd_prob: 0.3

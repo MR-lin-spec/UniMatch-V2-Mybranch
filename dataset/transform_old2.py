@@ -5,8 +5,6 @@ import torch
 from torchvision import transforms
 from torch import nn
 from torchvision.transforms import functional as TF
-import yaml
-
 
 def crop(img, mask, size, ignore_value=255):
     w, h = img.size

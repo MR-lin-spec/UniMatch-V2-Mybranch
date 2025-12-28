@@ -22,7 +22,6 @@ import numpy as np
 import torch.nn.functional as F  # ✅ 提前导入 F
 
 
-
 def set_seed(seed=42):
     os.environ['PYTHONHASHSEED'] = str(seed)
     random.seed(seed)
@@ -104,15 +103,12 @@ def main():
         'giant': {'encoder_size': 'giant', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
     }
 
-    #获取参数
-    use_dropout_cfg = cfg.get('use_dropout', True)
+    use_feature_aware_dropout_cfg = cfg.get('use_feature_aware_dropout', True)
     use_augmix_cfg = cfg.get('use_augmix', True)
     use_augment_cfg = cfg.get('use_augment', True)
-    fad_prob_cfg = cfg.get('fad_prob', 0.2)
-    cd_prob_cfg = cfg.get('cd_prob', 0.3)
-    cutmix_ratio_cfg = cfg.get('cutmix_ratio', 0.5)
+    cutmix_ratio_cfg = cfg.get('cutmix_ratio', 1.0)
     model = DPT(**{**model_configs[cfg['backbone'].split('_')[-1]], 'nclass': cfg['nclass'],
-                   'use_dropout': use_dropout_cfg, 'fad_prob': fad_prob_cfg, 'cd_prob': cd_prob_cfg})
+                   'use_feature_aware_dropout': use_feature_aware_dropout_cfg})
     state_dict = torch.load(f'./pretrained/{cfg["backbone"]}.pth')
     model.backbone.load_state_dict(state_dict)
 
@@ -220,7 +216,7 @@ def main():
                 img_u_s2[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1] = img_u_s2.flip(0)[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1]
 
             pred_x = model(img_x)
-            pred_u_s1, pred_u_s2 = model(torch.cat((img_u_s1, img_u_s2))).chunk(2)
+            pred_u_s1, pred_u_s2 = model(torch.cat((img_u_s1, img_u_s2)), comp_drop=cfg['comp_drop']).chunk(2)
 
             mask_u_w_cutmixed1, conf_u_w_cutmixed1, ignore_mask_cutmixed1 = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()
             mask_u_w_cutmixed2, conf_u_w_cutmixed2, ignore_mask_cutmixed2 = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()
@@ -311,16 +307,6 @@ def main():
                 writer.add_scalar('train/loss_s', loss_u_s.item(), iters)
                 writer.add_scalar('train/loss_consistency', loss_consistency.item(), iters)  # ✅ 统一 key
                 writer.add_scalar('train/mask_ratio', mask_ratio, iters)
-
-                # ✅ 新增：JSD 损失监控（仅在启用 JSD 时存在）
-                if 'loss_jsd' in locals() or (hasattr(loss_consistency, 'item') if 'loss_jsd' in globals() else False):
-                    jsd_val = loss_consistency.item()
-                    weighted_jsd = cfg.loss.jsd_weight * jsd_val  # 假设 jsd_weight 来自配置 cfg.loss.jsd_weight
-                    ce_loss_val = loss_x.item()  # 使用有标签 CE 损失作为参考基准
-
-                    writer.add_scalar('train/loss_jsd_raw', jsd_val, iters)
-                    writer.add_scalar('train/loss_jsd_weighted', weighted_jsd, iters)
-                    writer.add_scalar('train/ratio_weighted_jsd_to_ce', weighted_jsd / (ce_loss_val + 1e-8), iters)
 
                 if (i % (len(trainloader_u) // 8) == 0):
                     logger.info('Iters: {:}, LR: {:.7f}, Total loss: {:.3f}, Loss x: {:.3f}, Loss s: {:.3f}, '
