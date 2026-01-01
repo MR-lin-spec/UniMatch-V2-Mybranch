@@ -105,6 +105,7 @@ def main():
 
     use_feature_aware_dropout_cfg = cfg.get('use_feature_aware_dropout', True)
     use_augmix_cfg = cfg.get('use_augmix', True)
+    conf_thresh_cfg=cfg.get('conf_thresh', 0.95)
 
     model = DPT(**{**model_configs[cfg['backbone'].split('_')[-1]], 'nclass': cfg['nclass'],
                    'use_feature_aware_dropout': use_feature_aware_dropout_cfg,"feature_dropout_prob":cfg['feature_dropout_prob']})
@@ -168,8 +169,10 @@ def main():
     best_epoch, best_epoch_ema = 0, 0
     epoch = -1
 
+    low_thresh_count=0 #记录低于阈值的batch数量
+
     if os.path.exists(os.path.join(args.save_path, 'latest.pth')):
-        checkpoint = torch.load(os.path.join(args.save_path, 'latest.pth'), map_location='cpu')
+        checkpoint = torch.load(os.path.join(args.save_path, 'latest.pth'), map_location='cpu', weights_only=False)
         model.load_state_dict(checkpoint['model'])
         model_ema.load_state_dict(checkpoint['model_ema'])
         optimizer.load_state_dict(checkpoint['optimizer'])
@@ -225,15 +228,17 @@ def main():
             mask_u_w_cutmixed2[cutmix_box2 == 1] = mask_u_w.flip(0)[cutmix_box2 == 1]
             conf_u_w_cutmixed2[cutmix_box2 == 1] = conf_u_w.flip(0)[cutmix_box2 == 1]
             ignore_mask_cutmixed2[cutmix_box2 == 1] = ignore_mask.flip(0)[cutmix_box2 == 1]
-
+            #计算每一轮筛选后数据
+            low_thresh_count= (~((conf_u_w_cutmixed1 >=conf_thresh_cfg) & (ignore_mask_cutmixed1 != 255))).sum().item()
+    
             loss_x = criterion_l(pred_x, mask_x)
 
             loss_u_s1 = criterion_u(pred_u_s1, mask_u_w_cutmixed1)
-            loss_u_s1 = loss_u_s1 * ((conf_u_w_cutmixed1 >= cfg['conf_thresh']) & (ignore_mask_cutmixed1 != 255))
+            loss_u_s1 = loss_u_s1 * ((conf_u_w_cutmixed1 >=conf_thresh_cfg) & (ignore_mask_cutmixed1 != 255))
             loss_u_s1 = loss_u_s1.sum() / (ignore_mask_cutmixed1 != 255).sum().item()
 
             loss_u_s2 = criterion_u(pred_u_s2, mask_u_w_cutmixed2)
-            loss_u_s2 = loss_u_s2 * ((conf_u_w_cutmixed2 >= cfg['conf_thresh']) & (ignore_mask_cutmixed2 != 255))
+            loss_u_s2 = loss_u_s2 * ((conf_u_w_cutmixed2 >=conf_thresh_cfg) & (ignore_mask_cutmixed2 != 255))
             loss_u_s2 = loss_u_s2.sum() / (ignore_mask_cutmixed2 != 255).sum().item()
 
             loss_u_s = (loss_u_s1 + loss_u_s2) / 2.0
@@ -253,7 +258,7 @@ def main():
             consistency_type = 'none'
 
             # ✅ 只在有足够可信区域时计算一致性损失
-            mask_valid = (conf_u_w >= cfg['conf_thresh']) & (ignore_mask != 255)
+            mask_valid = (conf_u_w >= conf_thresh_cfg) & (ignore_mask != 255)
             mask_ratio_val = mask_valid.float().mean()
             if mask_ratio_val > 0.01:
                 if jsd_weight > 0:
@@ -284,7 +289,7 @@ def main():
             total_loss_s.update(loss_u_s.item())
             total_loss_consistency.update(loss_consistency.item())
 
-            mask_ratio = ((conf_u_w >= cfg['conf_thresh']) & (ignore_mask != 255)).sum().item() / (ignore_mask != 255).sum()
+            mask_ratio = ((conf_u_w >= conf_thresh_cfg) & (ignore_mask != 255)).sum().item() / (ignore_mask != 255).sum()
             total_mask_ratio.update(mask_ratio)
 
             iters = epoch * len(trainloader_u) + i
@@ -304,7 +309,7 @@ def main():
                 writer.add_scalar('train/loss_s', loss_u_s.item(), iters)
                 writer.add_scalar('train/loss_consistency', loss_consistency.item(), iters)  # ✅ 统一 key
                 writer.add_scalar('train/mask_ratio', mask_ratio, iters)
-
+                writer.add_scalar('train/low_thresh_count', low_thresh_count, iters) # 记录低于阈值的batch数量
                 # ✅ 新增：JSD 损失监控（仅在启用 JSD 时存在）
                 if 'loss_jsd' in locals() or (hasattr(loss_consistency, 'item') if 'loss_jsd' in globals() else False):
                     jsd_val = loss_consistency.item()
@@ -317,15 +322,15 @@ def main():
 
                 if (i % (len(trainloader_u) // 8) == 0):
                     logger.info('Iters: {:}, LR: {:.7f}, Total loss: {:.3f}, Loss x: {:.3f}, Loss s: {:.3f}, '
-                                'Loss {} ({:.3f}), Mask ratio: {:.3f}'.format(
+                                'Loss {} ({:.3f}), Mask ratio: {:.3f}, Low_thresh_count: {}'.format(
                         i, optimizer.param_groups[0]['lr'], total_loss.avg, total_loss_x.avg,
-                        total_loss_s.avg, consistency_type, total_loss_consistency.avg, total_mask_ratio.avg))
+                        total_loss_s.avg, consistency_type, total_loss_consistency.avg, total_mask_ratio.avg, low_thresh_count))
 
         eval_mode = 'sliding_window' if cfg['dataset'] == 'cityscapes' else 'original'
         mIoU, iou_class = evaluate(model, valloader, eval_mode, cfg, multiplier=14)
         mIoU_ema, iou_class_ema = evaluate(model_ema, valloader, eval_mode, cfg, multiplier=14)
 
-        if rank == 0:
+        if rank == 0 and epoch %2== 0:
             for (cls_idx, iou) in enumerate(iou_class):
                 logger.info('***** Evaluation ***** >>>> Class [{:} {:}] IoU: {:.2f}, '
                             'EMA: {:.2f}'.format(cls_idx, CLASSES[cfg['dataset']][cls_idx], iou, iou_class_ema[cls_idx]))

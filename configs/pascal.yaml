@@ -3,7 +3,7 @@
 
 # arguments for dataset
 dataset: pascal
-data_root: /root/autodl-tmp/VOC2012
+data_root: /home/roots/DeepLearning_Linux_MD/Dataset_MD/VOC2012     
 nclass: 21
 crop_size: 476
 use_augmix: False # 控制是否进行augmix
@@ -18,8 +18,8 @@ criterion:
   name: CELoss
   kwargs:
     ignore_index: 255
-conf_thresh: 0.80
-jsd_weight: 0.2 # 建议从 0.1 开始尝试，如 0.05, 0.1, 0.2
+conf_thresh: 0.95
+jsd_weight: 0.1 # 建议从 0.1 开始尝试，如 0.05, 0.1, 0.2
 mse_weight: 0  # ← 启用 MSE
 kl_weight: 0
 
