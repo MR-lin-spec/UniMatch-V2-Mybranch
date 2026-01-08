@@ -155,7 +155,8 @@ class DPT(nn.Module):
                 return features_2d.reshape(B, D, H * W).transpose(1, 2)
         return features
 
-    def forward(self, x, comp_drop=False):
+    # dpt.py —— 修改 forward 函数（替换原 forward）
+    def forward(self, x, comp_drop=False, return_dropout_masks=False):
         patch_h, patch_w = x.shape[-2] // 14, x.shape[-1] // 14
         features = self.backbone.get_intermediate_layers(x, self.intermediate_layer_idx[self.encoder_size])
 
@@ -174,8 +175,10 @@ class DPT(nn.Module):
                 moex_features.append(feature_moex)
             features = moex_features
 
+        dropout_masks_to_return = None
         if self.training and self.use_feature_aware_dropout:
             processed_features = []
+            dropout_masks_to_return = []
             for i, feature in enumerate(features):
                 B, N, D = feature.shape
                 H = W = int(N ** 0.5)
@@ -183,6 +186,9 @@ class DPT(nn.Module):
                 dropout_mask = self.feature_aware_dropout(feature_2d, dropout_prob=self.feature_dropout_prob)
                 if dropout_mask is not None:
                     feature_2d = self.apply_feature_aware_dropout(feature_2d, dropout_mask)
+                    dropout_masks_to_return.append(dropout_mask)  # [B,1,H,W]
+                else:
+                    dropout_masks_to_return.append(None)
                 feature_processed = feature_2d.reshape(B, D, H * W).transpose(1, 2)
                 processed_features.append(feature_processed)
             features = processed_features
@@ -202,8 +208,12 @@ class DPT(nn.Module):
             features = [feature * dropout_mask.unsqueeze(1) for feature in features]
             out = self.head(features, patch_h, patch_w)
             out = F.interpolate(out, (patch_h * 14, patch_w * 14), mode='bilinear', align_corners=True)
+            if return_dropout_masks:
+                return out, dropout_masks_to_return
             return out
 
         out = self.head(features, patch_h, patch_w)
         out = F.interpolate(out, (patch_h * 14, patch_w * 14), mode='bilinear', align_corners=True)
+        if return_dropout_masks:
+            return out, dropout_masks_to_return
         return out

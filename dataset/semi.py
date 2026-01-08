@@ -10,12 +10,15 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 class SemiDataset(Dataset):
-    def __init__(self, name, root, mode, size=None, id_path=None, nsample=None, use_augmix=True):
+    def __init__(self, name, root, mode, size=None, id_path=None, nsample=None, use_augmix=True,
+    use_augment=False,cutmix_ratio=0.5):
         self.name = name
         self.root = root
         self.mode = mode
         self.size = size
         self.use_augmix = use_augmix
+        self.use_augment = use_augment
+        self.cutmix_ratio = cutmix_ratio
         if mode == 'train_l' or mode == 'train_u':
             with open(id_path, 'r') as f:
                 self.ids = f.read().splitlines()
@@ -38,35 +41,38 @@ class SemiDataset(Dataset):
         if self.mode == 'val':
             img, mask = normalize(img, mask)
             return img, mask, id
+    
 
         img, mask = resize(img, mask, (0.5, 2.0))
         ignore_value = 254 if self.mode == 'train_u' else 255
         img, mask = crop(img, mask, self.size, ignore_value)
-        img, mask = hflip(img, mask, p=0.5)
+        # ✅ 使用新的 augmix_chain（无混合）
+        #使用随机augmix弱增强，或者手工自定义增强,如果都不指定，那就使用原图
+        if self.use_augmix:
+                img= augmix_chain(img)
+                mask=mask
+        elif self.use_augment:
+                img, mask = hflip(img, mask, p=0.5)
+        else:
+            img,mask=img,mask
 
         if self.mode == 'train_l':
             return normalize(img, mask)
 
         img_w, img_s1, img_s2 = deepcopy(img), deepcopy(img), deepcopy(img)
 
-        # ✅ 使用新的 augmix_chain（无混合）
-        if self.use_augmix:
-            if random.random() < 0.5:
-                img_s1 = augmix_chain(img_s1, k=3, p_apply=1.0)
-            if random.random() < 0.5:
-                img_s2 = augmix_chain(img_s2, k=3, p_apply=1.0)
-
+      
         if random.random() < 0.8:
             img_s1 = transforms.ColorJitter(0.5, 0.5, 0.5, 0.25)(img_s1)
             img_s1 = transforms.RandomGrayscale(p=0.2)(img_s1)
             img_s1 = blur(img_s1, p=0.5)
-        cutmix_box1 = obtain_cutmix_box(img_s1.size[0], p=0.5)
+        cutmix_box1 = obtain_cutmix_box(img_s1.size[0], p=self.cutmix_ratio)
 
         if random.random() < 0.8:
             img_s2 = transforms.ColorJitter(0.5, 0.5, 0.5, 0.25)(img_s2)
             img_s2 = transforms.RandomGrayscale(p=0.2)(img_s2)
             img_s2 = blur(img_s2, p=0.5)
-        cutmix_box2 = obtain_cutmix_box(img_s2.size[0], p=0.5)
+        cutmix_box2 = obtain_cutmix_box(img_s2.size[0], p=self.cutmix_ratio)
 
         ignore_mask = Image.fromarray(np.zeros((mask.size[1], mask.size[0])))
         img_s1, ignore_mask = normalize(img_s1, ignore_mask)

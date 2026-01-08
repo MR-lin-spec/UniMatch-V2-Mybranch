@@ -2,14 +2,15 @@
 dataset: coco
 data_root: /home/roots/DeepLearning_Linux_MD/Dataset_MD/COCO
 nclass: 81
-crop_size: 518
+crop_size: 476
 use_augmix: False # 控制是否进行augmix
 use_cutmix: True # 控制是否进行CutMix
-
+cutmix_ratio: 0.5 # CutMix的比例
+use_augment: True  # 控制是否进行增强
 
 # arguments for training
 epochs: 20
-batch_size: 4 # per GPU x 4 GPUs
+batch_size: 2 # per GPU x 4 GPUs
 lr: 0.000005
 lr_multi: 40.0
 criterion:

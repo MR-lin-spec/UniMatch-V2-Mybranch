@@ -12,7 +12,6 @@ from torch.utils.tensorboard import SummaryWriter
 import yaml
 from dataset.semi import SemiDataset
 from model.semseg.dpt import DPT
-from model.semseg.deeplabv3plus import DeepLabV3Plus
 from supervised import evaluate
 from util.classes import CLASSES
 from util.ohem import ProbOhemCrossEntropy2d
@@ -20,8 +19,7 @@ from util.utils import count_params, init_log, AverageMeter
 from util.dist_helper import setup_distributed
 import random
 import numpy as np
-import torch.nn.functional as F  # 提前导入 F
-import torch.distributed as dist
+import torch.nn.functional as F  # ✅ 提前导入 F
 
 
 def set_seed(seed=42):
@@ -38,7 +36,7 @@ def set_seed(seed=42):
 set_seed(42)
 
 
-# 安全的 JSD 实现（基于 log-probs）
+# ✅ 安全的 JSD 实现（基于 log-probs）
 def jensen_shannon_divergence(log_p, log_q):
     """
     Compute JSD between two log-probability distributions.
@@ -56,14 +54,14 @@ def jensen_shannon_divergence(log_p, log_q):
     return jsd.mean()
 
 
-# MSE loss between softmax outputs
+# ✅ MSE loss between softmax outputs
 def mse_loss(pred1, pred2):
     p1 = F.softmax(pred1, dim=1)
     p2 = F.softmax(pred2, dim=1)
     return F.mse_loss(p1, p2, reduction='mean')
 
 
-# Symmetric KL divergence (more stable than one-way)
+# ✅ Symmetric KL divergence (more stable than one-way)
 def kl_divergence(pred1, pred2):
     log_p1 = F.log_softmax(pred1, dim=1)
     log_p2 = F.log_softmax(pred2, dim=1)
@@ -102,62 +100,20 @@ def main():
         'small': {'encoder_size': 'small', 'features': 64, 'out_channels': [48, 96, 192, 384]},
         'base': {'encoder_size': 'base', 'features': 128, 'out_channels': [96, 192, 384, 768]},
         'large': {'encoder_size': 'large', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
-        'giant': {'encoder_size': 'giant', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]},
-    'resnet50': {
-        'backbone': 'resnet50',
-        'dilations': [6, 12, 18],
-        'replace_stride_with_dilation': [False, True, True],
-    },
-    'resnet101': {
-        'backbone': 'resnet101',
-        'dilations': [6, 12, 18],
-        'replace_stride_with_dilation': [False, True, True],
-    },
-    'xception': {
-        'backbone': 'xception',
-        'dilations': [6, 12, 18],
-        'replace_stride_with_dilation': None,  # xception 不需要这个
-    }
+        'giant': {'encoder_size': 'giant', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
     }
 
     use_feature_aware_dropout_cfg = cfg.get('use_feature_aware_dropout', True)
     use_augmix_cfg = cfg.get('use_augmix', True)
     conf_thresh_cfg=cfg.get('conf_thresh', 0.95)
-        #获取参数
-    use_dropout_cfg = cfg.get('use_dropout', True)
-    use_augment_cfg = cfg.get('use_augment', True)
-    cutmix_ratio_cfg = cfg.get('cutmix_ratio', 0.5)
-
-    #采用DeeplabV3Plus
-    # model = DeepLabV3Plus(**{**model_configs[cfg['backbone'].split('_')[-1]], 'nclass': cfg['nclass'],
-      #      'use_feature_aware_dropout': use_feature_aware_dropout_cfg,"feature_dropout_prob":cfg['feature_dropout_prob']})
 
     model = DPT(**{**model_configs[cfg['backbone'].split('_')[-1]], 'nclass': cfg['nclass'],
-                 'use_feature_aware_dropout': use_feature_aware_dropout_cfg,"feature_dropout_prob":cfg['feature_dropout_prob']})
-    #state_dict = torch.load(f'./pretrained/{cfg["backbone"]}.pth')
-    #model.backbone.load_state_dict(state_dict)
+                   'use_feature_aware_dropout': use_feature_aware_dropout_cfg,"feature_dropout_prob":cfg['feature_dropout_prob']})
+    state_dict = torch.load(f'./pretrained/{cfg["backbone"]}.pth')
+    model.backbone.load_state_dict(state_dict)
 
-    # Load pretrained backbone weights only for CNN-based models (e.g., DeepLabV3Plus with ResNet/Xception)
-    if 'dpt' not in cfg['backbone'].lower():
-        # Assume it's a CNN backbone like resnet50, resnet101, xception, etc.
-        pretrained_path = f'./pretrained/{cfg["backbone"]}.pth'
-        if os.path.exists(pretrained_path):
-            state_dict = torch.load(pretrained_path, map_location='cpu')
-            # Filter out task-specific heads (e.g., fc for ResNet, logits for Xception)
-            exclude_prefixes = ('fc', 'classifier', 'logits', 'pred')
-            filtered_state_dict = {
-                k: v for k, v in state_dict.items()
-                if not any(k.startswith(prefix) for prefix in exclude_prefixes)
-            }
-            model.backbone.load_state_dict(filtered_state_dict, strict=True)
-            if rank == 0:
-                logger.info(f'Successfully loaded pretrained weights from {pretrained_path}')
-        else:
-            if rank == 0:
-                logger.warning(f'Pretrained weights not found at {pretrained_path}, training from scratch.')
-    else:
-       state_dict = torch.load(f'./pretrained/{cfg["backbone"]}.pth')
-       model.backbone.load_state_dict(state_dict)
+    if cfg['lock_backbone']:
+        model.lock_backbone()
 
     optimizer = AdamW(
         [
@@ -194,12 +150,10 @@ def main():
     criterion_u = nn.CrossEntropyLoss(reduction='none').cuda(local_rank)
 
     trainset_u = SemiDataset(
-        cfg['dataset'], cfg['data_root'], 'train_u', cfg['crop_size'], args.unlabeled_id_path, use_augmix=use_augmix_cfg,use_augment=use_augment_cfg
-        ,cutmix_ratio=cutmix_ratio_cfg
+        cfg['dataset'], cfg['data_root'], 'train_u', cfg['crop_size'], args.unlabeled_id_path, use_augmix=use_augmix_cfg
     )
     trainset_l = SemiDataset(
-        cfg['dataset'], cfg['data_root'], 'train_l', cfg['crop_size'], args.labeled_id_path, nsample=len(trainset_u.ids), use_augmix=use_augmix_cfg,
-        use_augment=use_augment_cfg,cutmix_ratio=cutmix_ratio_cfg
+        cfg['dataset'], cfg['data_root'], 'train_l', cfg['crop_size'], args.labeled_id_path, nsample=len(trainset_u.ids), use_augmix=use_augmix_cfg
     )
     valset = SemiDataset(cfg['dataset'], cfg['data_root'], 'val')
 
@@ -233,49 +187,24 @@ def main():
     for epoch in range(epoch + 1, cfg['epochs']):
         if rank == 0:
             logger.info('===========> Epoch: {:}, Previous best: {:.2f} @epoch-{:}, '
-                    'EMA: {:.2f} @epoch-{:}'.format(epoch, previous_best, best_epoch, previous_best_ema, best_epoch_ema))
+                        'EMA: {:.2f} @epoch-{:}'.format(epoch, previous_best, best_epoch, previous_best_ema, best_epoch_ema))
+
         total_loss = AverageMeter()
         total_loss_x = AverageMeter()
         total_loss_s = AverageMeter()
-        total_loss_consistency = AverageMeter()
+        total_loss_consistency = AverageMeter()  # ✅ 统一 consistency loss meter
         total_mask_ratio = AverageMeter()
+
         trainloader_l.sampler.set_epoch(epoch)
         trainloader_u.sampler.set_epoch(epoch)
         loader = zip(trainloader_l, trainloader_u)
+
         model.train()
 
         for i, ((img_x, mask_x), (img_u_w, img_u_s1, img_u_s2, ignore_mask, cutmix_box1, cutmix_box2)) in enumerate(loader):
             img_x, mask_x = img_x.cuda(), mask_x.cuda()
             img_u_w, img_u_s1, img_u_s2 = img_u_w.cuda(), img_u_s1.cuda(), img_u_s2.cuda()
             ignore_mask, cutmix_box1, cutmix_box2 = ignore_mask.cuda(), cutmix_box1.cuda(), cutmix_box2.cuda()
-
-            # === 可视化 CutMix 图像（每 200 iters）===
-            if rank == 0 and i % 200 == 0 and writer is not None:
-                from torchvision.utils import make_grid
-                mean = torch.tensor([0.485, 0.456, 0.406], device=img_u_w.device).view(1, 3, 1, 1)
-                std = torch.tensor([0.229, 0.224, 0.225], device=img_u_w.device).view(1, 3, 1, 1)
-                
-                def denorm(x):
-                    return torch.clamp(x * std + mean, 0, 1)
-                
-                # Original weak
-                img_w_vis = denorm(img_u_w[:2])
-                # Strong before CutMix
-                img_s1_orig = denorm(img_u_s1[:2].clone())
-                img_s2_orig = denorm(img_u_s2[:2].clone())
-                # Apply CutMix manually for vis
-                img_s1_cutmix = img_s1_orig.clone()
-                img_s2_cutmix = img_s2_orig.clone()
-                if cfg['use_cutmix']:
-                    img_s1_cutmix[cutmix_box1[:2].unsqueeze(1).expand_as(img_s1_cutmix) == 1] = \
-                        img_s1_orig.flip(0)[cutmix_box1[:2].unsqueeze(1).expand_as(img_s1_cutmix) == 1]
-                    img_s2_cutmix[cutmix_box2[:2].unsqueeze(1).expand_as(img_s2_cutmix) == 1] = \
-                        img_s2_orig.flip(0)[cutmix_box2[:2].unsqueeze(1).expand_as(img_s2_cutmix) == 1]
-
-                grid = make_grid(torch.cat([img_w_vis, img_s1_orig, img_s1_cutmix, img_s2_orig, img_s2_cutmix], dim=0), nrow=2)
-                writer.add_image('train/cutmix_vis', grid, global_step=epoch * len(trainloader_u) + i)
-                if i % 6000 == 0:
-                    logger.info(f'✅ Saved CutMix visualization at iter {epoch * len(trainloader_u) + i}')
 
             with torch.no_grad():
                 pred_u_w = model_ema(img_u_w).detach()
@@ -286,77 +215,52 @@ def main():
                 img_u_s1[cutmix_box1.unsqueeze(1).expand(img_u_s1.shape) == 1] = img_u_s1.flip(0)[cutmix_box1.unsqueeze(1).expand(img_u_s1.shape) == 1]
                 img_u_s2[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1] = img_u_s2.flip(0)[cutmix_box2.unsqueeze(1).expand(img_u_s2.shape) == 1]
 
-            # Forward with dropout mask return
             pred_x = model(img_x)
-            pred_u_w_model = model(img_u_w)
-            mask_u_w_model = pred_u_w_model.argmax(dim=1)
-
-            # Get features with dropout masks
-            pred_u_s1_raw, dropout_masks1 = model(img_u_s1, comp_drop=cfg['comp_drop'], return_dropout_masks=True)
-            pred_u_s2_raw, dropout_masks2 = model(img_u_s2, comp_drop=cfg['comp_drop'], return_dropout_masks=True)
-
-            # === 可视化 Feature-aware Dropout Masks（每 200 iters）===
-            if rank == 0 and i % 200 == 0 and writer is not None and dropout_masks1 is not None:
-                for stage_idx, mask in enumerate(dropout_masks1):
-                    if mask is not None:
-                        # Take first sample, first channel
-                        m = mask[0, 0].detach().cpu().numpy()
-                        import matplotlib.pyplot as plt
-                        from PIL import Image
-                        from io import BytesIO
-                        plt.figure(figsize=(3, 3))
-                        plt.imshow(m, cmap='jet', vmin=0, vmax=1)
-                        plt.axis('off')
-                        buf = BytesIO()
-                        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-                        plt.close()
-                        buf.seek(0)
-                        mask_img = Image.open(buf)
-                        mask_tensor = torch.tensor(np.array(mask_img)).permute(2, 0, 1) / 255.0
-                        writer.add_image(f'train/dropout_mask_stage{stage_idx}', mask_tensor, global_step=epoch * len(trainloader_u) + i)
-                        buf.close()
-                if i % 6000 == 0:
-                    logger.info(f'✅ Saved feature-aware dropout masks at iter {epoch * len(trainloader_u) + i}')
-
-            # Continue with original logic using raw preds
-            pred_u_s1, pred_u_s2 = pred_u_s1_raw, pred_u_s2_raw
+            pred_u_s1, pred_u_s2 = model(torch.cat((img_u_s1, img_u_s2)), comp_drop=cfg['comp_drop']).chunk(2)
 
             mask_u_w_cutmixed1, conf_u_w_cutmixed1, ignore_mask_cutmixed1 = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()
             mask_u_w_cutmixed2, conf_u_w_cutmixed2, ignore_mask_cutmixed2 = mask_u_w.clone(), conf_u_w.clone(), ignore_mask.clone()
-            if cfg['use_cutmix']:
-                mask_u_w_cutmixed1[cutmix_box1 == 1] = mask_u_w.flip(0)[cutmix_box1 == 1]
-                conf_u_w_cutmixed1[cutmix_box1 == 1] = conf_u_w.flip(0)[cutmix_box1 == 1]
-                ignore_mask_cutmixed1[cutmix_box1 == 1] = ignore_mask.flip(0)[cutmix_box1 == 1]
-                mask_u_w_cutmixed2[cutmix_box2 == 1] = mask_u_w.flip(0)[cutmix_box2 == 1]
-                conf_u_w_cutmixed2[cutmix_box2 == 1] = conf_u_w.flip(0)[cutmix_box2 == 1]
-                ignore_mask_cutmixed2[cutmix_box2 == 1] = ignore_mask.flip(0)[cutmix_box2 == 1]
 
-            low_thresh_count = (~((conf_u_w_cutmixed1 >= conf_thresh_cfg) & (ignore_mask_cutmixed1 != 255))).sum().item()
+            mask_u_w_cutmixed1[cutmix_box1 == 1] = mask_u_w.flip(0)[cutmix_box1 == 1]
+            conf_u_w_cutmixed1[cutmix_box1 == 1] = conf_u_w.flip(0)[cutmix_box1 == 1]
+            ignore_mask_cutmixed1[cutmix_box1 == 1] = ignore_mask.flip(0)[cutmix_box1 == 1]
+
+            mask_u_w_cutmixed2[cutmix_box2 == 1] = mask_u_w.flip(0)[cutmix_box2 == 1]
+            conf_u_w_cutmixed2[cutmix_box2 == 1] = conf_u_w.flip(0)[cutmix_box2 == 1]
+            ignore_mask_cutmixed2[cutmix_box2 == 1] = ignore_mask.flip(0)[cutmix_box2 == 1]
+            #计算每一轮筛选后数据
+            low_thresh_count= (~((conf_u_w_cutmixed1 >=conf_thresh_cfg) & (ignore_mask_cutmixed1 != 255))).sum().item()
+    
             loss_x = criterion_l(pred_x, mask_x)
+
             loss_u_s1 = criterion_u(pred_u_s1, mask_u_w_cutmixed1)
-            loss_u_f = criterion_u(pred_u_w_model, mask_u_w_cutmixed1)
-            loss_u_f = loss_u_f * ((conf_u_w_cutmixed1 >= conf_thresh_cfg) & (ignore_mask_cutmixed1 != 255))
-            loss_u_f = loss_u_f.sum() / (ignore_mask_cutmixed1 != 255).sum().item()
-            loss_u_s1 = loss_u_s1 * ((conf_u_w_cutmixed1 >= conf_thresh_cfg) & (ignore_mask_cutmixed1 != 255))
+            loss_u_s1 = loss_u_s1 * ((conf_u_w_cutmixed1 >=conf_thresh_cfg) & (ignore_mask_cutmixed1 != 255))
             loss_u_s1 = loss_u_s1.sum() / (ignore_mask_cutmixed1 != 255).sum().item()
+
             loss_u_s2 = criterion_u(pred_u_s2, mask_u_w_cutmixed2)
-            loss_u_s2 = loss_u_s2 * ((conf_u_w_cutmixed2 >= conf_thresh_cfg) & (ignore_mask_cutmixed2 != 255))
+            loss_u_s2 = loss_u_s2 * ((conf_u_w_cutmixed2 >=conf_thresh_cfg) & (ignore_mask_cutmixed2 != 255))
             loss_u_s2 = loss_u_s2.sum() / (ignore_mask_cutmixed2 != 255).sum().item()
+
             loss_u_s = (loss_u_s1 + loss_u_s2) / 2.0
 
+            # ✅ 读取一致性损失权重
             jsd_weight = cfg.get('jsd_weight', 0.0)
             mse_weight = cfg.get('mse_weight', 0.0)
             kl_weight = cfg.get('kl_weight', 0.0)
+
+            # ✅ 互斥检查
             active_weights = [w for w in [jsd_weight, mse_weight, kl_weight] if w > 0]
             if len(active_weights) > 1:
                 raise ValueError(f"Only one of jsd_weight, mse_weight, kl_weight can be > 0. "
-                                f"Got JSD={jsd_weight}, MSE={mse_weight}, KL={kl_weight}")
+                                 f"Got JSD={jsd_weight}, MSE={mse_weight}, KL={kl_weight}")
 
             loss_consistency = torch.tensor(0.0, device=img_x.device)
             consistency_type = 'none'
+
+            # ✅ 只在有足够可信区域时计算一致性损失
             mask_valid = (conf_u_w >= conf_thresh_cfg) & (ignore_mask != 255)
             mask_ratio_val = mask_valid.float().mean()
-            if mask_ratio_val > 0.1:
+            if mask_ratio_val > 0.01:
                 if jsd_weight > 0:
                     log_p1 = F.log_softmax(pred_u_s1, dim=1)
                     log_p2 = F.log_softmax(pred_u_s2, dim=1)
@@ -369,11 +273,12 @@ def main():
                     loss_consistency = kl_divergence(pred_u_s1, pred_u_s2)
                     consistency_type = 'kl'
 
+            # ✅ Total loss with normalization
             if jsd_weight > 0 or mse_weight > 0 or kl_weight > 0:
-                weight = max(jsd_weight, mse_weight, kl_weight)
-                loss = (loss_x + loss_u_s + weight * loss_consistency + loss_u_f * 0) / (2.0 + weight)
+                weight = max(jsd_weight, mse_weight, kl_weight)  # only one > 0
+                loss = (loss_x + loss_u_s + weight * loss_consistency) / (2.0 + weight)
             else:
-                loss = (loss_x + loss_u_s + loss_u_f * 0) / 2.0
+                loss = (loss_x + loss_u_s) / 2.0
 
             optimizer.zero_grad()
             loss.backward()
@@ -383,6 +288,7 @@ def main():
             total_loss_x.update(loss_x.item())
             total_loss_s.update(loss_u_s.item())
             total_loss_consistency.update(loss_consistency.item())
+
             mask_ratio = ((conf_u_w >= conf_thresh_cfg) & (ignore_mask != 255)).sum().item() / (ignore_mask != 255).sum()
             total_mask_ratio.update(mask_ratio)
 
@@ -401,60 +307,63 @@ def main():
                 writer.add_scalar('train/loss_all', loss.item(), iters)
                 writer.add_scalar('train/loss_x', loss_x.item(), iters)
                 writer.add_scalar('train/loss_s', loss_u_s.item(), iters)
-                writer.add_scalar('train/loss_consistency', loss_consistency.item(), iters)
+                writer.add_scalar('train/loss_consistency', loss_consistency.item(), iters)  # ✅ 统一 key
                 writer.add_scalar('train/mask_ratio', mask_ratio, iters)
-                writer.add_scalar('train/low_thresh_count', low_thresh_count, iters)
+                writer.add_scalar('train/low_thresh_count', low_thresh_count, iters) # 记录低于阈值的batch数量
+                # ✅ 新增：JSD 损失监控（仅在启用 JSD 时存在）
+                if 'loss_jsd' in locals() or (hasattr(loss_consistency, 'item') if 'loss_jsd' in globals() else False):
+                    jsd_val = loss_consistency.item()
+                    weighted_jsd = cfg.loss.jsd_weight * jsd_val  # 假设 jsd_weight 来自配置 cfg.loss.jsd_weight
+                    ce_loss_val = loss_x.item()  # 使用有标签 CE 损失作为参考基准
+
+                    writer.add_scalar('train/loss_jsd_raw', jsd_val, iters)
+                    writer.add_scalar('train/loss_jsd_weighted', weighted_jsd, iters)
+                    writer.add_scalar('train/ratio_weighted_jsd_to_ce', weighted_jsd / (ce_loss_val + 1e-8), iters)
 
                 if (i % (len(trainloader_u) // 8) == 0):
                     logger.info('Iters: {:}, LR: {:.7f}, Total loss: {:.3f}, Loss x: {:.3f}, Loss s: {:.3f}, '
                                 'Loss {} ({:.3f}), Mask ratio: {:.3f}, Low_thresh_count: {}'.format(
-                        i, optimizer.param_groups[0]['lr'], total_loss.avg, total_loss_x.avg, total_loss_s.avg,
-                        consistency_type, total_loss_consistency.avg, total_mask_ratio.avg, low_thresh_count))
+                        i, optimizer.param_groups[0]['lr'], total_loss.avg, total_loss_x.avg,
+                        total_loss_s.avg, consistency_type, total_loss_consistency.avg, total_mask_ratio.avg, low_thresh_count))
 
-        # === End of epoch: visualize validation predictions ===
         eval_mode = 'sliding_window' if cfg['dataset'] == 'cityscapes' else 'original'
-        mIoU, iou_class = evaluate(model, valloader, eval_mode, cfg, multiplier=14,
-                                return_sample=True, writer=writer, step=epoch, dataset_name=cfg['dataset'])
-        mIoU_ema, iou_class_ema = evaluate(model_ema, valloader, eval_mode, cfg, multiplier=14,
-                                        return_sample=True, writer=writer, step=epoch, dataset_name=cfg['dataset'])
+        mIoU, iou_class = evaluate(model, valloader, eval_mode, cfg, multiplier=14)
+        mIoU_ema, iou_class_ema = evaluate(model_ema, valloader, eval_mode, cfg, multiplier=14)
 
-        if rank == 0:
+        if rank == 0 and epoch %2== 0:
             for (cls_idx, iou) in enumerate(iou_class):
                 logger.info('***** Evaluation ***** >>>> Class [{:} {:}] IoU: {:.2f}, '
                             'EMA: {:.2f}'.format(cls_idx, CLASSES[cfg['dataset']][cls_idx], iou, iou_class_ema[cls_idx]))
             logger.info('***** Evaluation {} ***** >>>> MeanIoU: {:.2f}, EMA: {:.2f}\n'.format(eval_mode, mIoU, mIoU_ema))
+
             writer.add_scalar('eval/mIoU', mIoU, epoch)
             writer.add_scalar('eval/mIoU_ema', mIoU_ema, epoch)
             for i, iou in enumerate(iou_class):
                 writer.add_scalar('eval/%s_IoU' % (CLASSES[cfg['dataset']][i]), iou, epoch)
                 writer.add_scalar('eval/%s_IoU_ema' % (CLASSES[cfg['dataset']][i]), iou_class_ema[i], epoch)
-            if i % 6000 == 0:
-                logger.info(f'✅ Saved validation prediction visualizations at epoch {epoch}')
 
-        is_best = mIoU >= previous_best
-        previous_best = max(mIoU, previous_best)
-        previous_best_ema = max(mIoU_ema, previous_best_ema)
-        if mIoU == previous_best:
-            best_epoch = epoch
-        if mIoU_ema == previous_best_ema:
-            best_epoch_ema = epoch
+            is_best = mIoU >= previous_best
+            previous_best = max(mIoU, previous_best)
+            previous_best_ema = max(mIoU_ema, previous_best_ema)
+            if mIoU == previous_best:
+                best_epoch = epoch
+            if mIoU_ema == previous_best_ema:
+                best_epoch_ema = epoch
 
-        checkpoint = {
-            'model': model.state_dict(),
-            'model_ema': model_ema.state_dict(),
-            'optimizer': optimizer.state_dict(),
-            'epoch': epoch,
-            'previous_best': previous_best,
-            'previous_best_ema': previous_best_ema,
-            'best_epoch': best_epoch,
-            'best_epoch_ema': best_epoch_ema
-        }
-        torch.save(checkpoint, os.path.join(args.save_path, 'latest.pth'))
-        if is_best:
-            torch.save(checkpoint, os.path.join(args.save_path, 'best.pth'))
-        # 在 main() 结束前（无论成功或异常）
-    if dist.is_initialized():
-        dist.destroy_process_group()
+            checkpoint = {
+                'model': model.state_dict(),
+                'model_ema': model_ema.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'epoch': epoch,
+                'previous_best': previous_best,
+                'previous_best_ema': previous_best_ema,
+                'best_epoch': best_epoch,
+                'best_epoch_ema': best_epoch_ema
+            }
+            torch.save(checkpoint, os.path.join(args.save_path, 'latest.pth'))
+            if is_best:
+                torch.save(checkpoint, os.path.join(args.save_path, 'best.pth'))
+
 
 if __name__ == '__main__':
     main()

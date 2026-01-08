@@ -5,10 +5,10 @@
 # method: ['unimatch_v2', 'fixmatch', 'supervised']
 # exp: just for specifying the 'save_path'
 # split: ['92', '1_16', ...]. Please check directory './splits/$dataset' for concrete splits
-dataset='cityscapes'
+dataset='pascal'
 method='unimatch_v2'
 exp='/root/autodl-tmp/'
-split='1_16'
+split='92'
 
 
 config=configs/${dataset}.yaml

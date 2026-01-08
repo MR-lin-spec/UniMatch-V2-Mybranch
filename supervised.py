@@ -33,22 +33,25 @@ parser.add_argument('--local_rank', '--local-rank', default=0, type=int)
 parser.add_argument('--port', default=None, type=int)
 
 
-def evaluate(model, loader, mode, cfg, multiplier=None):
+# supervised.py —— 替换 evaluate 函数
+def evaluate(model, loader, mode, cfg, multiplier=None, return_sample=False, writer=None, step=0, dataset_name=None):
     model.eval()
     assert mode in ['original', 'center_crop', 'sliding_window']
     intersection_meter = AverageMeter()
     union_meter = AverageMeter()
+    # 在 evaluate 开始处（或加载 cmap 后）
+   
+    vis_data = None
 
     with torch.no_grad():
-        for img, mask, id in loader:
-            
+        for idx, (img, mask, id) in enumerate(loader):
             img = img.cuda()
-                
+            original_img = img.clone()  # 用于可视化
+
             if mode == 'sliding_window':
                 grid = cfg['crop_size']
                 b, _, h, w = img.shape
                 final = torch.zeros(b, cfg['nclass'], h, w).cuda()
-                
                 row = 0
                 while row < h:
                     col = 0
@@ -61,12 +64,9 @@ def evaluate(model, loader, mode, cfg, multiplier=None):
                     if row == h - grid:
                         break
                     row = min(row + int(grid * 2 / 3), h - grid)
-                    
                 pred = final
-            
             else:
                 assert mode == 'original'
-                
                 if multiplier is not None:
                     ori_h, ori_w = img.shape[-2:]
                     if multiplier == 512:
@@ -74,49 +74,69 @@ def evaluate(model, loader, mode, cfg, multiplier=None):
                     else:
                         new_h, new_w = int(ori_h / multiplier + 0.5) * multiplier, int(ori_w / multiplier + 0.5) * multiplier
                     img = F.interpolate(img, (new_h, new_w), mode='bilinear', align_corners=True)
-                
                 pred = model(img, comp_drop=False)
-            
                 if multiplier is not None:
                     pred = F.interpolate(pred, (ori_h, ori_w), mode='bilinear', align_corners=True)
-            
-            pred = pred.argmax(dim=1)
 
-            # Ensure pred and mask have matching batch/spatial dims before computing intersection/union
-            pred_np = pred.cpu().numpy()
-            # mask may be batched (B,H,W) or single (H,W); ensure numpy
-            mask_np = mask.numpy()
+            pred_argmax = pred.argmax(dim=1)
 
-            # If one has batch dim and the other doesn't, expand the missing dim when batch==1
+            # Convert to numpy for IoU
+            pred_np = pred_argmax.cpu().numpy()
+            mask_np = mask.cpu().numpy()
             if pred_np.ndim == 3 and mask_np.ndim == 2:
                 mask_np = np.expand_dims(mask_np, 0)
             elif pred_np.ndim == 2 and mask_np.ndim == 3:
                 pred_np = np.expand_dims(pred_np, 0)
 
-            # After potential expansion, shapes must match
             if pred_np.shape != mask_np.shape:
-                raise AssertionError('Prediction and target shapes do not match for IoU: pred %s vs mask %s' % (
-                    str(pred_np.shape), str(mask_np.shape)
-                ))
+                raise AssertionError('Shape mismatch')
 
             intersection, union, target = intersectionAndUnion(pred_np, mask_np, cfg['nclass'], 255)
-
             reduced_intersection = torch.from_numpy(intersection).cuda()
             reduced_union = torch.from_numpy(union).cuda()
             reduced_target = torch.from_numpy(target).cuda()
-
-            dist.all_reduce(reduced_intersection)
-            dist.all_reduce(reduced_union)
-            dist.all_reduce(reduced_target)
-
+            if dist.is_available() and dist.is_initialized():
+                dist.all_reduce(reduced_intersection)
+                dist.all_reduce(reduced_union)
+                dist.all_reduce(reduced_target)
             intersection_meter.update(reduced_intersection.cpu().numpy())
             union_meter.update(reduced_union.cpu().numpy())
+
+            # Save first sample for visualization (only once)
+            if return_sample and vis_data is None and torch.distributed.get_rank() == 0:
+                vis_data = {
+                    'image': original_img[0].cpu(),
+                    'gt': mask[0].cpu(),
+                    'pred': pred_argmax[0].cpu(),
+                    'id': id[0]
+                }
 
     iou_class = intersection_meter.sum / (union_meter.sum + 1e-10) * 100.0
     mIOU = np.mean(iou_class)
 
-    return mIOU, iou_class
+    # Visualize if requested
+    if return_sample and vis_data is not None and writer is not None and dataset_name is not None:
+        from util.utils import color_map
+        image = vis_data['image']
+        gt = vis_data['gt']
+        pred = vis_data['pred']
+        cmap = color_map(dataset_name)
+        cmap = torch.from_numpy(cmap).to(gt.device)  # shape: [256, 3]
+        
 
+        # Denormalize image (assuming ImageNet norm)
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+        image = image * std + mean
+        image = torch.clamp(image, 0, 1)
+
+        gt_color = cmap[gt.long()].permute(2, 0, 1) / 255.0
+        pred_color = cmap[pred.long()].permute(2, 0, 1) / 255.0
+
+        grid = torch.stack([image, gt_color, pred_color], dim=0)  # (3, 3, H, W)
+        writer.add_images('eval/vis', grid, global_step=step)
+
+    return mIOU, iou_class
 
 def main():
     args = parser.parse_args()
